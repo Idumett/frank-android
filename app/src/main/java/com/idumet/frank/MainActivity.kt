@@ -20,6 +20,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import com.idumet.frank.network.FrankClient
+import kotlinx.coroutines.launch
 import com.idumet.frank.service.AudioRecorder
 import com.idumet.frank.permissions.PermissionManager
 import com.idumet.frank.ui.theme.FrankTheme
@@ -51,6 +54,12 @@ private fun PermissionScreen() {
 
     val recordingStatus = remember {
         mutableStateOf("Ready")
+    }
+
+    val coroutineScope = rememberCoroutineScope()
+
+    val serverStatus = remember {
+        mutableStateOf("Server not tested")
     }
 
     DisposableEffect(Unit) {
@@ -129,8 +138,39 @@ private fun PermissionScreen() {
             )
         }
 
+
         Text(
             text = recordingStatus.value,
+            modifier = Modifier.padding(top = 12.dp)
+        )
+
+        Button(
+            modifier = Modifier.padding(top = 16.dp),
+            onClick = {
+                coroutineScope.launch {
+                    serverStatus.value = "Connecting..."
+
+                    try {
+                        val response = FrankClient.api.healthCheck()
+
+                        serverStatus.value =
+                            if (response.isSuccessful) {
+                                "Frank server connected"
+                            } else {
+                                "Server returned HTTP ${response.code()}"
+                            }
+                    } catch (exception: Exception) {
+                        serverStatus.value =
+                            exception.message ?: "Connection failed"
+                    }
+                }
+            }
+        ) {
+            Text("Test server connection")
+        }
+
+        Text(
+            text = serverStatus.value,
             modifier = Modifier.padding(top = 12.dp)
         )
     }
