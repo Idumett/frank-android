@@ -17,6 +17,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import com.idumet.frank.service.AudioRecorder
 import com.idumet.frank.permissions.PermissionManager
 import com.idumet.frank.ui.theme.FrankTheme
 
@@ -36,6 +40,24 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun PermissionScreen() {
     val context = LocalContext.current
+
+    val audioRecorder = remember {
+        AudioRecorder(context.applicationContext)
+    }
+
+    val isRecording = remember {
+        mutableStateOf(false)
+    }
+
+    val recordingStatus = remember {
+        mutableStateOf("Ready")
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            audioRecorder.cancel()
+        }
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -75,5 +97,41 @@ private fun PermissionScreen() {
         ) {
             Text("Enable Frank")
         }
+
+        Button(
+            modifier = Modifier.padding(top = 16.dp),
+            onClick = {
+                try {
+                    if (!isRecording.value) {
+                        audioRecorder.start()
+                        isRecording.value = true
+                        recordingStatus.value = "Recording..."
+                    } else {
+                        val file = audioRecorder.stop()
+                        isRecording.value = false
+
+                        recordingStatus.value =
+                            "Saved ${file?.name} (${file?.length()} bytes)"
+                    }
+                } catch (exception: Exception) {
+                    isRecording.value = false
+                    recordingStatus.value =
+                        exception.message ?: "Recording failed"
+                }
+            }
+        ) {
+            Text(
+                if (isRecording.value) {
+                    "Stop recording"
+                } else {
+                    "Start recording"
+                }
+            )
+        }
+
+        Text(
+            text = recordingStatus.value,
+            modifier = Modifier.padding(top = 12.dp)
+        )
     }
 }
