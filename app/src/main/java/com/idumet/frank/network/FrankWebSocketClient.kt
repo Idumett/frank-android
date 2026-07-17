@@ -8,6 +8,8 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import android.util.Base64
+import java.io.File
 
 class FrankWebSocketClient(
     private val listener: Listener
@@ -32,6 +34,7 @@ class FrankWebSocketClient(
 
     private var webSocket: WebSocket? = null
     private var sessionId: String = createSessionId()
+    private var isReady = false
 
     fun connect() {
         if (webSocket != null) {
@@ -75,6 +78,7 @@ class FrankWebSocketClient(
                     code: Int,
                     reason: String
                 ) {
+                    isReady = false
                     this@FrankWebSocketClient.webSocket = null
                     listener.onDisconnected()
                 }
@@ -84,6 +88,7 @@ class FrankWebSocketClient(
                     throwable: Throwable,
                     response: Response?
                 ) {
+                    isReady = false
                     this@FrankWebSocketClient.webSocket = null
 
                     val message = buildString {
@@ -98,6 +103,35 @@ class FrankWebSocketClient(
                 }
             }
         )
+    }
+
+    fun sendAudio(file: File) {
+        check(isReady) {
+            "Frank device stream is not ready"
+        }
+
+        check(file.exists() && file.length() > 44) {
+            "Recorded audio file is empty"
+        }
+
+        val audioBase64 = Base64.encodeToString(
+            file.readBytes(),
+            Base64.NO_WRAP
+        )
+
+        val message = DeviceAudioMessage(
+            audioBase64 = audioBase64
+        )
+
+        val sent = webSocket?.send(
+            gson.toJson(message)
+        ) == true
+
+        if (!sent) {
+            throw IllegalStateException(
+                "Failed to send audio to Frank"
+            )
+        }
     }
 
     private fun sendHello(webSocket: WebSocket) {
@@ -127,7 +161,10 @@ class FrankWebSocketClient(
             )
 
             when (message.type) {
-                "ready" -> listener.onReady()
+                "ready" -> {
+                    isReady = true
+                    listener.onReady()
+                }
 
                 "transcript" -> {
                     message.transcript?.let(listener::onTranscript)
@@ -155,6 +192,8 @@ class FrankWebSocketClient(
     }
 
     fun disconnect() {
+        isReady = false;
+
         webSocket?.close(
             1000,
             "Android client closed"

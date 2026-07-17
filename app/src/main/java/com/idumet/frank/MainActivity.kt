@@ -24,7 +24,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import com.idumet.frank.network.FrankClient
 import com.idumet.frank.network.FrankWebSocketClient
 import com.idumet.frank.network.SttClient
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.idumet.frank.service.AudioRecorder
 import com.idumet.frank.permissions.PermissionManager
 import com.idumet.frank.ui.theme.FrankTheme
@@ -81,15 +83,15 @@ private fun PermissionScreen() {
                 }
 
                 override fun onTranscript(transcript: String) {
-                    streamStatus.value = "You: $transcript"
+                    recordingStatus.value = "You: $transcript"
                 }
 
                 override fun onReply(reply: String) {
-                    streamStatus.value = "Frank: $reply"
+                    recordingStatus.value = "Frank: $reply"
                 }
 
                 override fun onAudioReceived(bytesBase64: String) {
-                    streamStatus.value = "Frank audio received"
+                    recordingStatus.value = "Frank audio received"
                 }
 
                 override fun onError(message: String) {
@@ -159,17 +161,33 @@ private fun PermissionScreen() {
                         recordingStatus.value = "Recording..."
                     } else {
                         val file = audioRecorder.stop()
-                        recordingStatus.value = "Transcribing..."
+                        isRecording.value = false
+
+                        if (file == null) {
+                            recordingStatus.value =
+                                "No recording created"
+                            return@Button
+                        }
+
+                        recordingStatus.value =
+                            "Sending to Frank..."
 
                         coroutineScope.launch {
                             try {
-                                val result = SttClient.transcribe(file!!)
-                                recordingStatus.value = result.transcript
-                            } catch (e: Exception) {
-                                recordingStatus.value = e.message ?: "Transcription failed"
+                                withContext(Dispatchers.IO) {
+                                    webSocketClient.sendAudio(file)
+                                }
+
+                                recordingStatus.value =
+                                    "Processing..."
+                            } catch (exception: Exception) {
+                                recordingStatus.value =
+                                    exception.message
+                                        ?: "Failed to send audio"
+                            } finally {
+                                file.delete()
                             }
                         }
-                        isRecording.value = false
                     }
                 } catch (exception: Exception) {
                     isRecording.value = false

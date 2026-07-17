@@ -27,3 +27,9 @@ data class DeviceStreamMessage(
 data class DeviceReply(
     val speak: String? = null
 )
+
+data class DeviceAudioMessage(
+    val type: String = "audio",
+    val mime: String = "audio/wav",
+    val audioBase64: String
+)
