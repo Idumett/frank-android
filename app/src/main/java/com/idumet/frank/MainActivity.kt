@@ -22,6 +22,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import com.idumet.frank.network.FrankClient
+import com.idumet.frank.network.FrankWebSocketClient
 import com.idumet.frank.network.SttClient
 import kotlinx.coroutines.launch
 import com.idumet.frank.service.AudioRecorder
@@ -63,9 +64,49 @@ private fun PermissionScreen() {
         mutableStateOf("Server not tested")
     }
 
+    val streamStatus = remember {
+        mutableStateOf("Device stream disconnected")
+    }
+
+    val webSocketClient = remember {
+        FrankWebSocketClient(
+            listener = object : FrankWebSocketClient.Listener {
+
+                override fun onConnecting() {
+                    streamStatus.value = "Connecting..."
+                }
+
+                override fun onReady() {
+                    streamStatus.value = "Frank device stream ready"
+                }
+
+                override fun onTranscript(transcript: String) {
+                    streamStatus.value = "You: $transcript"
+                }
+
+                override fun onReply(reply: String) {
+                    streamStatus.value = "Frank: $reply"
+                }
+
+                override fun onAudioReceived(bytesBase64: String) {
+                    streamStatus.value = "Frank audio received"
+                }
+
+                override fun onError(message: String) {
+                    streamStatus.value = "Error: $message"
+                }
+
+                override fun onDisconnected() {
+                    streamStatus.value = "Device stream disconnected"
+                }
+            }
+        )
+    }
+
     DisposableEffect(Unit) {
         onDispose {
             audioRecorder.cancel()
+            webSocketClient.disconnect()
         }
     }
 
@@ -179,6 +220,20 @@ private fun PermissionScreen() {
 
         Text(
             text = serverStatus.value,
+            modifier = Modifier.padding(top = 12.dp)
+        )
+
+        Button(
+            modifier = Modifier.padding(top = 16.dp),
+            onClick = {
+                webSocketClient.connect()
+            }
+        ) {
+            Text("Connect device stream")
+        }
+
+        Text(
+            text = streamStatus.value,
             modifier = Modifier.padding(top = 12.dp)
         )
     }
