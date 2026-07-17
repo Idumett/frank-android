@@ -10,9 +10,11 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun ConversationControls(
     isRecording: Boolean,
+    isStreamReady: Boolean,
     recordingStatus: String,
     streamStatus: String,
     serverStatus: String,
+    showConnectButton: Boolean,
     showServerHealthControls: Boolean,
     showCloseButton: Boolean,
     onToggleRecording: () -> Unit,
@@ -20,11 +22,13 @@ fun ConversationControls(
     onTestServer: () -> Unit,
     onClose: () -> Unit
 ) {
-    Button(
-        modifier = Modifier.padding(top = 16.dp),
-        onClick = onConnectStream
-    ) {
-        Text("Connect device stream")
+    if (showConnectButton) {
+        Button(
+            modifier = Modifier.padding(top = 16.dp),
+            onClick = onConnectStream
+        ) {
+            Text("Connect device stream")
+        }
     }
 
     Text(
@@ -34,6 +38,7 @@ fun ConversationControls(
 
     Button(
         modifier = Modifier.padding(top = 16.dp),
+        enabled = isStreamReady,
         onClick = onToggleRecording
     ) {
         Text(

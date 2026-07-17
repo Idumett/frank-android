@@ -2,6 +2,7 @@ package com.idumet.frank
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -18,6 +19,8 @@ import kotlinx.coroutines.withContext
 
 @Composable
 fun FrankConversationHost(
+    autoConnect: Boolean,
+    showConnectButton: Boolean,
     showServerHealthControls: Boolean,
     showCloseButton: Boolean,
     onClose: () -> Unit = {}
@@ -49,15 +52,21 @@ fun FrankConversationHost(
         mutableStateOf("Server not tested")
     }
 
+    var isStreamReady by remember {
+        mutableStateOf(false)
+    }
+
     val webSocketClient = remember {
         FrankWebSocketClient(
             listener = object : FrankWebSocketClient.Listener {
 
                 override fun onConnecting() {
-                    streamStatus = "Connecting..."
+                    isStreamReady = false
+                    streamStatus = "Connecting to Frank..."
                 }
 
                 override fun onReady() {
+                    isStreamReady = true
                     streamStatus = "Frank device stream ready"
                 }
 
@@ -70,14 +79,12 @@ fun FrankConversationHost(
                 }
 
                 override fun onAudioReceived(bytesBase64: String) {
-                    recordingStatus =
-                        "Preparing Frank's response..."
+                    recordingStatus = "Preparing Frank's response..."
 
                     audioPlayer.play(
                         bytesBase64 = bytesBase64,
                         onStarted = {
-                            recordingStatus =
-                                "Frank is speaking..."
+                            recordingStatus = "Frank is speaking..."
                         },
                         onCompleted = {
                             recordingStatus = "Ready"
@@ -89,26 +96,41 @@ fun FrankConversationHost(
                 }
 
                 override fun onError(message: String) {
+                    isStreamReady = false
                     streamStatus = "Error: $message"
                 }
 
                 override fun onDisconnected() {
-                    streamStatus =
-                        "Device stream disconnected"
+                    isStreamReady = false
+                    streamStatus = "Device stream disconnected"
                 }
             }
         )
     }
 
+    LaunchedEffect(autoConnect) {
+        if (autoConnect) {
+            webSocketClient.connect()
+        }
+    }
+
     DisposableEffect(Unit) {
         onDispose {
-            audioRecorder.cancel()
+            if (isRecording) {
+                audioRecorder.cancel()
+            }
+
             audioPlayer.release()
             webSocketClient.disconnect()
         }
     }
 
     fun toggleRecording() {
+        if (!isStreamReady) {
+            recordingStatus = "Wait for Frank to connect"
+            return
+        }
+
         try {
             if (!isRecording) {
                 audioPlayer.stop()
@@ -123,27 +145,22 @@ fun FrankConversationHost(
             isRecording = false
 
             if (audioFile == null) {
-                recordingStatus =
-                    "No recording created"
+                recordingStatus = "No recording created"
                 return
             }
 
-            recordingStatus =
-                "Sending to Frank..."
+            recordingStatus = "Sending to Frank..."
 
             coroutineScope.launch {
                 try {
                     withContext(Dispatchers.IO) {
-                        webSocketClient.sendAudio(
-                            audioFile
-                        )
+                        webSocketClient.sendAudio(audioFile)
                     }
 
                     recordingStatus = "Processing..."
                 } catch (exception: Exception) {
                     recordingStatus =
-                        exception.message
-                            ?: "Failed to send audio"
+                        exception.message ?: "Failed to send audio"
                 } finally {
                     audioFile.delete()
                 }
@@ -152,8 +169,7 @@ fun FrankConversationHost(
             isRecording = false
 
             recordingStatus =
-                exception.message
-                    ?: "Recording failed"
+                exception.message ?: "Recording failed"
         }
     }
 
@@ -162,8 +178,7 @@ fun FrankConversationHost(
             serverStatus = "Connecting..."
 
             try {
-                val response =
-                    FrankClient.api.healthCheck()
+                val response = FrankClient.api.healthCheck()
 
                 serverStatus =
                     if (response.isSuccessful) {
@@ -173,19 +188,19 @@ fun FrankConversationHost(
                     }
             } catch (exception: Exception) {
                 serverStatus =
-                    exception.message
-                        ?: "Connection failed"
+                    exception.message ?: "Connection failed"
             }
         }
     }
 
     ConversationControls(
         isRecording = isRecording,
+        isStreamReady = isStreamReady,
         recordingStatus = recordingStatus,
         streamStatus = streamStatus,
         serverStatus = serverStatus,
-        showServerHealthControls =
-            showServerHealthControls,
+        showConnectButton = showConnectButton,
+        showServerHealthControls = showServerHealthControls,
         showCloseButton = showCloseButton,
         onToggleRecording = ::toggleRecording,
         onConnectStream = {

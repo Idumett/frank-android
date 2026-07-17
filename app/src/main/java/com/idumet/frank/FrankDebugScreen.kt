@@ -24,6 +24,8 @@ fun FrankDebugScreen() {
         FrankPermissionSection()
 
         FrankConversationHost(
+            autoConnect = false,
+            showConnectButton = true,
             showServerHealthControls = true,
             showCloseButton = false
         )

@@ -24,6 +24,8 @@ fun FrankAssistantScreen(
         Text("Frank")
 
         FrankConversationHost(
+            autoConnect = true,
+            showConnectButton = false,
             showServerHealthControls = false,
             showCloseButton = true,
             onClose = onClose
