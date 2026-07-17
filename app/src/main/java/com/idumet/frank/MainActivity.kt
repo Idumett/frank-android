@@ -22,6 +22,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import com.idumet.frank.network.FrankClient
+import com.idumet.frank.network.SttClient
 import kotlinx.coroutines.launch
 import com.idumet.frank.service.AudioRecorder
 import com.idumet.frank.permissions.PermissionManager
@@ -117,10 +118,17 @@ private fun PermissionScreen() {
                         recordingStatus.value = "Recording..."
                     } else {
                         val file = audioRecorder.stop()
-                        isRecording.value = false
+                        recordingStatus.value = "Transcribing..."
 
-                        recordingStatus.value =
-                            "Saved ${file?.name} (${file?.length()} bytes)"
+                        coroutineScope.launch {
+                            try {
+                                val result = SttClient.transcribe(file!!)
+                                recordingStatus.value = result.transcript
+                            } catch (e: Exception) {
+                                recordingStatus.value = e.message ?: "Transcription failed"
+                            }
+                        }
+                        isRecording.value = false
                     }
                 } catch (exception: Exception) {
                     isRecording.value = false

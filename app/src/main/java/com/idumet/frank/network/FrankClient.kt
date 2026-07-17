@@ -13,6 +13,7 @@ object FrankClient {
 
     private val loggingInterceptor = HttpLoggingInterceptor().apply {
         level = HttpLoggingInterceptor.Level.BASIC
+//        level = HttpLoggingInterceptor.Level.BODY
     }
 
     private val httpClient = OkHttpClient.Builder()
@@ -31,4 +32,3 @@ object FrankClient {
             .create(FrankApi::class.java)
     }
 }
-
