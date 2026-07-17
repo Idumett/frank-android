@@ -38,12 +38,14 @@ class FrankVoiceInteractionSession(
     ViewModelStoreOwner,
     SavedStateRegistryOwner {
 
-    private val lifecycleRegistry = LifecycleRegistry(this)
+    private val lifecycleRegistry =
+        LifecycleRegistry(this)
 
     private val savedStateController =
         SavedStateRegistryController.create(this)
 
-    private val sessionViewModelStore = ViewModelStore()
+    private val sessionViewModelStore =
+        ViewModelStore()
 
     override val lifecycle: Lifecycle
         get() = lifecycleRegistry
@@ -51,8 +53,10 @@ class FrankVoiceInteractionSession(
     override val viewModelStore: ViewModelStore
         get() = sessionViewModelStore
 
-    override val savedStateRegistry: SavedStateRegistry
-        get() = savedStateController.savedStateRegistry
+    override val savedStateRegistry:
+            SavedStateRegistry
+        get() =
+            savedStateController.savedStateRegistry
 
     override fun onCreate() {
         savedStateController.performAttach()
@@ -67,7 +71,6 @@ class FrankVoiceInteractionSession(
 
     override fun onCreateContentView(): View {
         return ComposeView(context).apply {
-
             setViewTreeLifecycleOwner(
                 this@FrankVoiceInteractionSession
             )
@@ -81,15 +84,15 @@ class FrankVoiceInteractionSession(
             )
 
             setViewCompositionStrategy(
-                ViewCompositionStrategy.DisposeOnLifecycleDestroyed(
-                    this@FrankVoiceInteractionSession
-                )
+                ViewCompositionStrategy
+                    .DisposeOnLifecycleDestroyed(
+                        this@FrankVoiceInteractionSession
+                    )
             )
 
             setContent {
                 FrankTheme {
                     FrankAssistantScreen(
-                        assistantMode = true,
                         onClose = ::finish
                     )
                 }
