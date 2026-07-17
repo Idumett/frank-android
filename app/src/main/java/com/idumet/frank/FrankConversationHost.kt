@@ -20,6 +20,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun FrankConversationHost(
     autoConnect: Boolean,
+    autoStartRecording: Boolean,
     showConnectButton: Boolean,
     showServerHealthControls: Boolean,
     showCloseButton: Boolean,
@@ -42,6 +43,10 @@ fun FrankConversationHost(
 
     var recordingStatus by remember {
         mutableStateOf("Ready")
+    }
+
+    var hasAutoStarted by remember {
+        mutableStateOf(false)
     }
 
     var streamStatus by remember {
@@ -116,6 +121,8 @@ fun FrankConversationHost(
 
     DisposableEffect(Unit) {
         onDispose {
+            hasAutoStarted = false
+
             if (isRecording) {
                 audioRecorder.cancel()
             }
@@ -137,7 +144,7 @@ fun FrankConversationHost(
                 audioRecorder.start()
 
                 isRecording = true
-                recordingStatus = "Recording..."
+                recordingStatus = "Listening..."
                 return
             }
 
@@ -149,7 +156,7 @@ fun FrankConversationHost(
                 return
             }
 
-            recordingStatus = "Sending to Frank..."
+            recordingStatus = "Processing..."
 
             coroutineScope.launch {
                 try {
@@ -190,6 +197,22 @@ fun FrankConversationHost(
                 serverStatus =
                     exception.message ?: "Connection failed"
             }
+        }
+    }
+
+    LaunchedEffect(
+        isStreamReady,
+        autoStartRecording
+    ) {
+        if (
+            autoStartRecording &&
+            isStreamReady &&
+            !hasAutoStarted &&
+            !isRecording
+        ) {
+            hasAutoStarted = true
+
+            toggleRecording()
         }
     }
 

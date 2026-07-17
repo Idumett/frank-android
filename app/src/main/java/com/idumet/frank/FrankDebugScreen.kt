@@ -25,6 +25,7 @@ fun FrankDebugScreen() {
 
         FrankConversationHost(
             autoConnect = false,
+            autoStartRecording = false,
             showConnectButton = true,
             showServerHealthControls = true,
             showCloseButton = false

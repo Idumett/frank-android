@@ -25,6 +25,7 @@ fun FrankAssistantScreen(
 
         FrankConversationHost(
             autoConnect = true,
+            autoStartRecording = true,
             showConnectButton = false,
             showServerHealthControls = false,
             showCloseButton = true,
