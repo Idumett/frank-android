@@ -28,6 +28,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.idumet.frank.service.AudioRecorder
+import com.idumet.frank.service.FrankAudioPlayer
 import com.idumet.frank.permissions.PermissionManager
 import com.idumet.frank.ui.theme.FrankTheme
 
@@ -50,6 +51,10 @@ private fun PermissionScreen() {
 
     val audioRecorder = remember {
         AudioRecorder(context.applicationContext)
+    }
+
+    val audioPlayer = remember {
+        FrankAudioPlayer(context)
     }
 
     val isRecording = remember {
@@ -91,7 +96,20 @@ private fun PermissionScreen() {
                 }
 
                 override fun onAudioReceived(bytesBase64: String) {
-                    recordingStatus.value = "Frank audio received"
+                    recordingStatus.value = "Preparing Frank's response..."
+
+                    audioPlayer.play(
+                        bytesBase64 = bytesBase64,
+                        onStarted = {
+                            recordingStatus.value = "Frank is speaking..."
+                        },
+                        onCompleted = {
+                            recordingStatus.value = "Ready"
+                        },
+                        onError = { message ->
+                            recordingStatus.value = message
+                        }
+                    )
                 }
 
                 override fun onError(message: String) {
@@ -108,6 +126,7 @@ private fun PermissionScreen() {
     DisposableEffect(Unit) {
         onDispose {
             audioRecorder.cancel()
+            audioPlayer.release()
             webSocketClient.disconnect()
         }
     }
@@ -156,6 +175,7 @@ private fun PermissionScreen() {
             onClick = {
                 try {
                     if (!isRecording.value) {
+                        audioPlayer.stop()
                         audioRecorder.start()
                         isRecording.value = true
                         recordingStatus.value = "Recording..."
