@@ -1,12 +1,25 @@
 package com.idumet.frank
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.scaleIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,66 +40,141 @@ fun FrankAssistantScreen(
         mutableStateOf(AssistantState.Idle)
     }
 
-    val statusText = when (assistantState) {
-        AssistantState.Idle -> "Ready"
-
-        AssistantState.Listening -> "Listening..."
-
-        AssistantState.Thinking -> "Thinking..."
-
-        AssistantState.Speaking -> "Speaking..."
-
-        AssistantState.Error -> "Something went wrong"
+    var isVisible by remember {
+        mutableStateOf(false)
     }
 
-    Column(
+    val backgroundAnimation = rememberInfiniteTransition(
+        label = "FrankBackgroundAnimation"
+    )
+
+    val gradientMovement by backgroundAnimation.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(
+                durationMillis = 9_000,
+                easing = FastOutSlowInEasing
+            ),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "FrankBackgroundMovement"
+    )
+
+    val statusText = when (assistantState) {
+        AssistantState.Idle ->
+            "Ready"
+
+        AssistantState.Listening ->
+            "Listening..."
+
+        AssistantState.Thinking ->
+            "Thinking..."
+
+        AssistantState.Speaking ->
+            "Speaking..."
+
+        AssistantState.Error ->
+            "Sorry, I didn't catch that."
+    }
+
+    val backgroundColors = listOf(
+        Color(
+            red = 0.01f + gradientMovement * 0.01f,
+            green = 0.03f,
+            blue = 0.09f + gradientMovement * 0.03f
+        ),
+        Color(
+            red = 0.05f,
+            green = 0.09f + gradientMovement * 0.02f,
+            blue = 0.17f
+        ),
+        Color(
+            red = 0.07f + gradientMovement * 0.02f,
+            green = 0.09f,
+            blue = 0.15f
+        )
+    )
+
+    LaunchedEffect(Unit) {
+        isVisible = true
+    }
+
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(
                 Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0xFF020617),
-                        Color(0xFF0F172A),
-                        Color(0xFF111827)
-                    )
+                    colors = backgroundColors
                 )
             )
             .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
+        contentAlignment = Alignment.Center
     ) {
-        Text(
-            text = "FRANK",
-            color = Color.White,
-            fontSize = 24.sp,
-            fontWeight = FontWeight.SemiBold,
-            letterSpacing = 6.sp
-        )
-
-        FrankEye(
-            state = assistantState,
-            modifier = Modifier.padding(
-                top = 32.dp,
-                bottom = 24.dp
+        AnimatedVisibility(
+            visible = isVisible,
+            enter = fadeIn(
+                animationSpec = tween(
+                    durationMillis = 350
+                )
+            ) + scaleIn(
+                initialScale = 0.82f,
+                animationSpec = spring(
+                    dampingRatio = 0.78f,
+                    stiffness = 320f
+                )
             )
-        )
+        ) {
+            Column(
+                horizontalAlignment =
+                    Alignment.CenterHorizontally,
+                verticalArrangement =
+                    Arrangement.Center
+            ) {
+                Text(
+                    text = "FRANK",
+                    color = Color.White,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 6.sp
+                )
 
-        Text(
-            text = statusText,
-            color = Color.White.copy(alpha = 0.85f),
-            fontSize = 18.sp
-        )
+                FrankEye(
+                    state = assistantState,
+                    modifier = Modifier.padding(
+                        top = 32.dp,
+                        bottom = 24.dp
+                    )
+                )
 
-        FrankConversationHost(
-            autoConnect = true,
-            autoStartRecording = true,
-            showConnectButton = false,
-            showServerHealthControls = false,
-            showCloseButton = true,
-            onAssistantStateChanged = {
-                assistantState = it
-            },
-            onClose = onClose
-        )
+                Crossfade(
+                    targetState = statusText,
+                    animationSpec = tween(
+                        durationMillis = 250
+                    ),
+                    label = "FrankStatusTransition"
+                ) { text ->
+                    Text(
+                        text = text,
+                        color = Color.White.copy(
+                            alpha = 0.85f
+                        ),
+                        fontSize = 18.sp
+                    )
+                }
+
+                FrankConversationHost(
+                    autoConnect = true,
+                    autoStartRecording = true,
+                    showConnectButton = false,
+                    showServerHealthControls = false,
+                    showCloseButton = true,
+                    onAssistantStateChanged = {
+                        assistantState = it
+                    },
+                    onClose = onClose
+                )
+            }
+        }
     }
 }

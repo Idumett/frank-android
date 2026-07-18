@@ -4,6 +4,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -50,7 +51,9 @@ fun FrankEye(
             AssistantState.Error ->
                 Color(0xFFEF4444)
         },
-        animationSpec = tween(500),
+        animationSpec = tween(
+            durationMillis = 500
+        ),
         label = "FrankEyePrimaryColor"
     )
 
@@ -71,24 +74,86 @@ fun FrankEye(
             AssistantState.Error ->
                 Color(0xFFF97316)
         },
-        animationSpec = tween(500),
+        animationSpec = tween(
+            durationMillis = 500
+        ),
         label = "FrankEyeSecondaryColor"
     )
 
+    val irisStateScale by animateFloatAsState(
+        targetValue = when (state) {
+            AssistantState.Idle ->
+                1f
+
+            AssistantState.Listening ->
+                1.05f
+
+            AssistantState.Thinking ->
+                0.88f
+
+            AssistantState.Speaking ->
+                1.12f
+
+            AssistantState.Error ->
+                0.94f
+        },
+        animationSpec = tween(
+            durationMillis = 450,
+            easing = FastOutSlowInEasing
+        ),
+        label = "FrankIrisStateScale"
+    )
+
+    val eyeStateScale by animateFloatAsState(
+        targetValue = when (state) {
+            AssistantState.Thinking ->
+                0.96f
+
+            AssistantState.Speaking ->
+                1.04f
+
+            else ->
+                1f
+        },
+        animationSpec = tween(
+            durationMillis = 500,
+            easing = FastOutSlowInEasing
+        ),
+        label = "FrankEyeStateScale"
+    )
+
     val pulseTarget = when (state) {
-        AssistantState.Idle -> 1.03f
-        AssistantState.Listening -> 1.10f
-        AssistantState.Thinking -> 1.06f
-        AssistantState.Speaking -> 1.16f
-        AssistantState.Error -> 1.03f
+        AssistantState.Idle ->
+            1.03f
+
+        AssistantState.Listening ->
+            1.10f
+
+        AssistantState.Thinking ->
+            1.06f
+
+        AssistantState.Speaking ->
+            1.16f
+
+        AssistantState.Error ->
+            1.03f
     }
 
     val pulseDuration = when (state) {
-        AssistantState.Idle -> 1_800
-        AssistantState.Listening -> 900
-        AssistantState.Thinking -> 650
-        AssistantState.Speaking -> 450
-        AssistantState.Error -> 300
+        AssistantState.Idle ->
+            1_800
+
+        AssistantState.Listening ->
+            900
+
+        AssistantState.Thinking ->
+            650
+
+        AssistantState.Speaking ->
+            450
+
+        AssistantState.Error ->
+            300
     }
 
     val pulse by animation.animateFloat(
@@ -127,9 +192,17 @@ fun FrankEye(
         animationSpec = infiniteRepeatable(
             animation = tween(
                 durationMillis = when (state) {
-                    AssistantState.Listening -> 1_600
-                    AssistantState.Thinking -> 900
-                    else -> 2_600
+                    AssistantState.Listening ->
+                        1_600
+
+                    AssistantState.Thinking ->
+                        900
+
+                    AssistantState.Speaking ->
+                        2_200
+
+                    else ->
+                        2_600
                 },
                 easing = FastOutSlowInEasing
             ),
@@ -144,10 +217,17 @@ fun FrankEye(
         animationSpec = infiniteRepeatable(
             animation = tween(
                 durationMillis = when (state) {
-                    AssistantState.Thinking -> 1_700
-                    AssistantState.Listening -> 3_500
-                    AssistantState.Speaking -> 2_300
-                    else -> 7_000
+                    AssistantState.Thinking ->
+                        1_700
+
+                    AssistantState.Listening ->
+                        3_500
+
+                    AssistantState.Speaking ->
+                        2_300
+
+                    else ->
+                        7_000
                 }
             )
         ),
@@ -167,13 +247,18 @@ fun FrankEye(
             )
 
             val outerRadius =
-                size.minDimension * 0.43f * pulse
+                size.minDimension *
+                        0.43f *
+                        pulse *
+                        eyeStateScale
 
             val glowBrush = Brush.sweepGradient(
                 colors = listOf(
                     primaryColor,
                     secondaryColor,
-                    primaryColor.copy(alpha = 0.7f),
+                    primaryColor.copy(
+                        alpha = 0.7f
+                    ),
                     secondaryColor,
                     primaryColor
                 ),
@@ -183,8 +268,12 @@ fun FrankEye(
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        primaryColor.copy(alpha = 0.32f),
-                        primaryColor.copy(alpha = 0.08f),
+                        primaryColor.copy(
+                            alpha = 0.32f
+                        ),
+                        primaryColor.copy(
+                            alpha = 0.08f
+                        ),
                         Color.Transparent
                     ),
                     center = centre,
@@ -203,23 +292,42 @@ fun FrankEye(
                     radius = outerRadius,
                     center = centre,
                     style = Stroke(
-                        width = size.minDimension * 0.035f
+                        width =
+                            size.minDimension *
+                                    0.035f
                     ),
                     alpha = 0.7f
                 )
             }
 
-            val eyeWidth = size.width * 0.72f
-            val eyeHeight =
-                size.height * 0.34f * blink
+            val eyeWidth =
+                size.width *
+                        0.72f *
+                        eyeStateScale
 
-            val left = centre.x - eyeWidth / 2f
-            val right = centre.x + eyeWidth / 2f
-            val top = centre.y - eyeHeight / 2f
-            val bottom = centre.y + eyeHeight / 2f
+            val eyeHeight =
+                size.height *
+                        0.34f *
+                        blink *
+                        eyeStateScale
+
+            val left =
+                centre.x - eyeWidth / 2f
+
+            val right =
+                centre.x + eyeWidth / 2f
+
+            val top =
+                centre.y - eyeHeight / 2f
+
+            val bottom =
+                centre.y + eyeHeight / 2f
 
             val eyePath = Path().apply {
-                moveTo(left, centre.y)
+                moveTo(
+                    left,
+                    centre.y
+                )
 
                 cubicTo(
                     left + eyeWidth * 0.22f,
@@ -246,9 +354,15 @@ fun FrankEye(
                 path = eyePath,
                 brush = Brush.horizontalGradient(
                     colors = listOf(
-                        primaryColor.copy(alpha = 0.22f),
-                        Color.White.copy(alpha = 0.96f),
-                        secondaryColor.copy(alpha = 0.22f)
+                        primaryColor.copy(
+                            alpha = 0.22f
+                        ),
+                        Color.White.copy(
+                            alpha = 0.96f
+                        ),
+                        secondaryColor.copy(
+                            alpha = 0.22f
+                        )
                     )
                 )
             )
@@ -257,16 +371,26 @@ fun FrankEye(
                 path = eyePath,
                 brush = glowBrush,
                 style = Stroke(
-                    width = size.minDimension * 0.018f
+                    width =
+                        size.minDimension *
+                                0.018f
                 )
             )
 
             if (blink > 0.25f) {
                 val movementMultiplier =
                     when (state) {
-                        AssistantState.Listening -> 0.10f
-                        AssistantState.Thinking -> 0.05f
-                        else -> 0.07f
+                        AssistantState.Listening ->
+                            0.10f
+
+                        AssistantState.Thinking ->
+                            0.035f
+
+                        AssistantState.Speaking ->
+                            0.015f
+
+                        else ->
+                            0.07f
                     }
 
                 val pupilOffset =
@@ -274,18 +398,28 @@ fun FrankEye(
                             eyeWidth *
                             movementMultiplier
 
+                val verticalMovement =
+                    when (state) {
+                        AssistantState.Speaking ->
+                            0f
+
+                        else ->
+                            sin(pupilMovement) *
+                                    eyeHeight *
+                                    0.05f
+                    }
+
                 val irisCentre = Offset(
                     x = centre.x + pupilOffset,
                     y = centre.y +
-                            sin(pupilMovement) *
-                            eyeHeight *
-                            0.05f
+                            verticalMovement
                 )
 
                 val irisRadius =
                     size.minDimension *
                             0.115f *
-                            pulse
+                            pulse *
+                            irisStateScale
 
                 drawCircle(
                     brush = Brush.radialGradient(
@@ -308,7 +442,9 @@ fun FrankEye(
                 )
 
                 drawCircle(
-                    color = Color.White.copy(alpha = 0.88f),
+                    color = Color.White.copy(
+                        alpha = 0.88f
+                    ),
                     radius = irisRadius * 0.13f,
                     center = Offset(
                         x = irisCentre.x -
