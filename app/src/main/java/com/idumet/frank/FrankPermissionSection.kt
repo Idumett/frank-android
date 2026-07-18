@@ -13,26 +13,39 @@ import androidx.compose.ui.unit.dp
 import com.idumet.frank.permissions.PermissionManager
 
 @Composable
-fun FrankPermissionSection() {
+fun FrankPermissionSection(
+    onPermissionsGranted: (() -> Unit)? = null
+) {
     val context = LocalContext.current
 
-    val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        val allGranted = permissions.values.all { granted ->
-            granted
-        }
+    val permissionLauncher =
+        rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { permissions ->
 
-        Toast.makeText(
-            context,
+            val microphoneGranted =
+                permissions["android.permission.RECORD_AUDIO"] == true
+
+            val cameraGranted =
+                permissions["android.permission.CAMERA"] == true
+
+            val allGranted =
+                microphoneGranted && cameraGranted
+
+            Toast.makeText(
+                context,
+                if (allGranted) {
+                    "Frank is ready"
+                } else {
+                    "Microphone and camera permissions are required"
+                },
+                Toast.LENGTH_LONG
+            ).show()
+
             if (allGranted) {
-                "Frank is ready"
-            } else {
-                "Microphone and camera permissions are required"
-            },
-            Toast.LENGTH_LONG
-        ).show()
-    }
+                onPermissionsGranted?.invoke()
+            }
+        }
 
     Text(
         text = "Frank needs microphone and camera access.",

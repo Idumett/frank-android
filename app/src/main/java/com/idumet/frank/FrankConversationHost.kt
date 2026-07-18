@@ -11,6 +11,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.idumet.frank.camera.FrankCamera
 import com.idumet.frank.network.FrankClient
 import com.idumet.frank.network.FrankWebSocketClient
 import com.idumet.frank.service.AdaptiveSilenceDetector
@@ -19,6 +21,7 @@ import com.idumet.frank.service.FrankAudioPlayer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 @Composable
@@ -31,7 +34,9 @@ fun FrankConversationHost(
     onClose: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val coroutineScope = rememberCoroutineScope()
+
     val mainHandler = remember {
         Handler(Looper.getMainLooper())
     }
@@ -44,6 +49,14 @@ fun FrankConversationHost(
         FrankAudioPlayer(context.applicationContext)
     }
 
+    /*
+     * Camera capture is enabled automatically for the assistant overlay.
+     *
+     * The debug screen currently passes autoStartRecording = false,
+     * so camera capture remains disabled there.
+     */
+    val cameraEnabled = autoStartRecording
+
     var isRecording by remember {
         mutableStateOf(false)
     }
@@ -53,6 +66,10 @@ fun FrankConversationHost(
     }
 
     var hasAutoStarted by remember {
+        mutableStateOf(false)
+    }
+
+    var hasCameraFrame by remember {
         mutableStateOf(false)
     }
 
@@ -70,17 +87,58 @@ fun FrankConversationHost(
         mutableStateOf("Server not tested")
     }
 
+    var silenceDetector by remember {
+        mutableStateOf<AdaptiveSilenceDetector?>(
+            null
+        )
+    }
+
     val stopInProgress = remember {
         AtomicBoolean(false)
     }
 
-    var silenceDetector:
-            AdaptiveSilenceDetector? by remember {
-        mutableStateOf(null)
+    val camera = remember {
+        FrankCamera(
+            context = context.applicationContext,
+            captureIntervalMs = 1_000L,
+            jpegQuality = 80,
+            onFrameCaptured = {
+                hasCameraFrame = true
+            },
+            onError = { message ->
+                /*
+                 * Camera failure should not prevent voice-only use.
+                 * Frank can still process the recorded audio.
+                 */
+                hasCameraFrame = false
+
+                if (!isRecording) {
+                    recordingStatus =
+                        "Camera unavailable: $message"
+                }
+            }
+        )
     }
 
     lateinit var webSocketClient:
             FrankWebSocketClient
+
+    fun clearSilenceDetection() {
+        silenceDetector?.reset()
+        silenceDetector = null
+
+        audioRecorder.setAudioSampleListener(
+            null
+        )
+    }
+
+    fun deleteTemporaryFiles(
+        audioFile: File?,
+        imageFile: File?
+    ) {
+        audioFile?.delete()
+        imageFile?.delete()
+    }
 
     fun stopAndSendRecording(
         statusBeforeSending: String
@@ -98,40 +156,71 @@ fun FrankConversationHost(
         recordingStatus = statusBeforeSending
 
         coroutineScope.launch {
+            var audioFile: File? = null
+            var imageFile: File? = null
+
             try {
-                val audioFile =
+                /*
+                 * Stop audio first so no additional samples are written while
+                 * the WAV file is being finalised.
+                 */
+                audioFile =
                     withContext(Dispatchers.IO) {
                         audioRecorder.stop()
                     }
 
                 isRecording = false
-                silenceDetector?.reset()
-                silenceDetector = null
+                clearSilenceDetection()
 
                 if (audioFile == null) {
                     recordingStatus =
                         "No recording created"
+
                     return@launch
                 }
 
-                recordingStatus = "Processing..."
-
-                try {
-                    withContext(Dispatchers.IO) {
-                        webSocketClient.sendAudio(
-                            audioFile
-                        )
+                /*
+                 * copyLatestFrame() returns a separate temporary file.
+                 * The camera can therefore continue replacing its internal
+                 * latest frame safely.
+                 */
+                imageFile =
+                    if (cameraEnabled) {
+                        withContext(Dispatchers.IO) {
+                            camera.copyLatestFrame()
+                        }
+                    } else {
+                        null
                     }
-                } finally {
-                    audioFile.delete()
+
+                recordingStatus =
+                    if (imageFile != null) {
+                        "Sending audio and image..."
+                    } else {
+                        "Sending audio..."
+                    }
+
+                withContext(Dispatchers.IO) {
+                    webSocketClient.sendRequest(
+                        audioFile = audioFile,
+                        imageFile = imageFile
+                    )
                 }
+
+                recordingStatus = "Thinking..."
             } catch (exception: Exception) {
                 isRecording = false
+                clearSilenceDetection()
 
                 recordingStatus =
                     exception.message
-                        ?: "Failed to send audio"
+                        ?: "Failed to send request"
             } finally {
+                deleteTemporaryFiles(
+                    audioFile = audioFile,
+                    imageFile = imageFile
+                )
+
                 stopInProgress.set(false)
             }
         }
@@ -147,6 +236,7 @@ fun FrankConversationHost(
         if (!isStreamReady) {
             recordingStatus =
                 "Wait for Frank to connect"
+
             return
         }
 
@@ -173,63 +263,74 @@ fun FrankConversationHost(
                         },
                         onFinished = { reason ->
                             mainHandler.post {
-                                val status =
-                                    when (reason) {
-                                        AdaptiveSilenceDetector
-                                            .FinishReason
-                                            .SILENCE_AFTER_SPEECH ->
-                                            "Processing..."
-
-                                        AdaptiveSilenceDetector
-                                            .FinishReason
-                                            .NO_SPEECH_TIMEOUT ->
-                                            "No speech detected"
-
-                                        AdaptiveSilenceDetector
-                                            .FinishReason
-                                            .MAXIMUM_DURATION ->
-                                            "Processing..."
+                                when (reason) {
+                                    AdaptiveSilenceDetector
+                                        .FinishReason
+                                        .SILENCE_AFTER_SPEECH -> {
+                                        stopAndSendRecording(
+                                            statusBeforeSending =
+                                                "Speech complete"
+                                        )
                                     }
 
-                                stopAndSendRecording(
-                                    status
-                                )
+                                    AdaptiveSilenceDetector
+                                        .FinishReason
+                                        .MAXIMUM_DURATION -> {
+                                        stopAndSendRecording(
+                                            statusBeforeSending =
+                                                "Maximum recording reached"
+                                        )
+                                    }
+
+                                    AdaptiveSilenceDetector
+                                        .FinishReason
+                                        .NO_SPEECH_TIMEOUT -> {
+                                        stopAndSendRecording(
+                                            statusBeforeSending =
+                                                "No speech detected"
+                                        )
+                                    }
+                                }
                             }
                         }
                     )
 
                 silenceDetector = detector
 
-                audioRecorder
-                    .setAudioSampleListener {
-                            samples,
-                            sampleCount ->
+                audioRecorder.setAudioSampleListener {
+                        samples,
+                        sampleCount ->
 
-                        detector.process(
-                            samples = samples,
-                            sampleCount = sampleCount
-                        )
-                    }
+                    detector.process(
+                        samples = samples,
+                        sampleCount = sampleCount
+                    )
+                }
 
                 detector.start()
             } else {
-                audioRecorder
-                    .setAudioSampleListener(null)
+                clearSilenceDetection()
             }
 
             audioRecorder.start()
             isRecording = true
 
             recordingStatus =
-                if (useSilenceDetection) {
-                    "Listening..."
-                } else {
-                    "Recording..."
+                when {
+                    useSilenceDetection &&
+                            cameraEnabled &&
+                            hasCameraFrame ->
+                        "Listening with camera..."
+
+                    useSilenceDetection ->
+                        "Listening..."
+
+                    else ->
+                        "Recording..."
                 }
         } catch (exception: Exception) {
             isRecording = false
-            silenceDetector?.reset()
-            silenceDetector = null
+            clearSilenceDetection()
 
             recordingStatus =
                 exception.message
@@ -318,14 +419,29 @@ fun FrankConversationHost(
                         }
                     }
 
+                    override fun onFrameAcknowledged(
+                        seq: Int
+                    ) {
+                        /*
+                         * No visual update is required.
+                         *
+                         * The acknowledgement confirms the server has stored
+                         * the frame. WebSocket ordering already ensures that
+                         * the image message precedes the audio message.
+                         */
+                    }
+
                     override fun onError(
                         message: String
                     ) {
                         mainHandler.post {
-                            isStreamReady = false
-
                             streamStatus =
                                 "Error: $message"
+
+                            if (!isRecording) {
+                                recordingStatus =
+                                    "Error: $message"
+                            }
                         }
                     }
 
@@ -341,12 +457,37 @@ fun FrankConversationHost(
         )
     }
 
+    /*
+     * Start continuous camera capture as soon as the assistant overlay is
+     * composed. The newest local JPEG is replaced approximately every second.
+     */
+    DisposableEffect(
+        cameraEnabled,
+        lifecycleOwner
+    ) {
+        if (cameraEnabled) {
+            camera.start(
+                lifecycleOwner = lifecycleOwner
+            )
+        }
+
+        onDispose {
+            camera.release()
+        }
+    }
+
     LaunchedEffect(autoConnect) {
         if (autoConnect) {
             webSocketClient.connect()
         }
     }
 
+    /*
+     * Wait for the WebSocket before automatically recording.
+     *
+     * Camera capture begins independently, so in most cases a recent frame
+     * already exists when the user finishes speaking.
+     */
     LaunchedEffect(
         isStreamReady,
         autoStartRecording
@@ -368,11 +509,8 @@ fun FrankConversationHost(
     DisposableEffect(Unit) {
         onDispose {
             hasAutoStarted = false
-            silenceDetector?.reset()
-            silenceDetector = null
 
-            audioRecorder
-                .setAudioSampleListener(null)
+            clearSilenceDetection()
 
             if (audioRecorder.isRecording) {
                 audioRecorder.cancel()
