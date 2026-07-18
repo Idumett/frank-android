@@ -31,6 +31,9 @@ fun FrankConversationHost(
     showConnectButton: Boolean,
     showServerHealthControls: Boolean,
     showCloseButton: Boolean,
+    onAssistantStateChanged: (
+        AssistantState
+    ) -> Unit = {},
     onClose: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -47,6 +50,12 @@ fun FrankConversationHost(
 
     val audioPlayer = remember {
         FrankAudioPlayer(context.applicationContext)
+    }
+
+    fun updateAssistantState(
+        state: AssistantState
+    ) {
+        onAssistantStateChanged(state)
     }
 
     /*
@@ -155,6 +164,10 @@ fun FrankConversationHost(
 
         recordingStatus = statusBeforeSending
 
+        updateAssistantState(
+            AssistantState.Thinking
+        )
+
         coroutineScope.launch {
             var audioFile: File? = null
             var imageFile: File? = null
@@ -211,6 +224,7 @@ fun FrankConversationHost(
             } catch (exception: Exception) {
                 isRecording = false
                 clearSilenceDetection()
+                updateAssistantState(AssistantState.Error)
 
                 recordingStatus =
                     exception.message
@@ -243,6 +257,7 @@ fun FrankConversationHost(
         try {
             audioPlayer.stop()
             stopInProgress.set(false)
+            updateAssistantState(AssistantState.Listening)
 
             if (useSilenceDetection) {
                 val detector =
@@ -257,8 +272,11 @@ fun FrankConversationHost(
                         thresholdMargin = 250.0,
                         onSpeechStarted = {
                             mainHandler.post {
-                                recordingStatus =
-                                    "Listening..."
+                                recordingStatus = "Listening..."
+
+                                updateAssistantState(
+                                    AssistantState.Listening
+                                )
                             }
                         },
                         onFinished = { reason ->
@@ -331,6 +349,7 @@ fun FrankConversationHost(
         } catch (exception: Exception) {
             isRecording = false
             clearSilenceDetection()
+            updateAssistantState(AssistantState.Error)
 
             recordingStatus =
                 exception.message
@@ -360,18 +379,16 @@ fun FrankConversationHost(
                     override fun onConnecting() {
                         mainHandler.post {
                             isStreamReady = false
-
-                            streamStatus =
-                                "Connecting to Frank..."
+                            streamStatus = "Connecting to Frank..."
+                            updateAssistantState(AssistantState.Idle)
                         }
                     }
 
                     override fun onReady() {
                         mainHandler.post {
                             isStreamReady = true
-
-                            streamStatus =
-                                "Frank device stream ready"
+                            streamStatus = "Frank device stream ready"
+                            updateAssistantState(AssistantState.Idle)
                         }
                     }
 
@@ -379,8 +396,8 @@ fun FrankConversationHost(
                         transcript: String
                     ) {
                         mainHandler.post {
-                            recordingStatus =
-                                "You: $transcript"
+                            recordingStatus = "You: $transcript"
+                            updateAssistantState(AssistantState.Thinking)
                         }
                     }
 
@@ -388,8 +405,8 @@ fun FrankConversationHost(
                         reply: String
                     ) {
                         mainHandler.post {
-                            recordingStatus =
-                                "Frank: $reply"
+                            recordingStatus = "Frank: $reply"
+                            updateAssistantState(AssistantState.Thinking)
                         }
                     }
 
@@ -397,23 +414,22 @@ fun FrankConversationHost(
                         bytesBase64: String
                     ) {
                         mainHandler.post {
-                            recordingStatus =
-                                "Preparing Frank's response..."
+                            recordingStatus = "Preparing Frank's response..."
+                            updateAssistantState(AssistantState.Thinking)
 
                             audioPlayer.play(
-                                bytesBase64 =
-                                    bytesBase64,
+                                bytesBase64 = bytesBase64,
                                 onStarted = {
-                                    recordingStatus =
-                                        "Frank is speaking..."
+                                    recordingStatus = "Frank is speaking..."
+                                    updateAssistantState(AssistantState.Speaking)
                                 },
                                 onCompleted = {
-                                    recordingStatus =
-                                        "Ready"
+                                    recordingStatus = "Ready"
+                                    updateAssistantState(AssistantState.Idle)
                                 },
                                 onError = { message ->
-                                    recordingStatus =
-                                        message
+                                    recordingStatus = message
+                                    updateAssistantState(AssistantState.Error)
                                 }
                             )
                         }
@@ -435,22 +451,21 @@ fun FrankConversationHost(
                         message: String
                     ) {
                         mainHandler.post {
-                            streamStatus =
-                                "Error: $message"
+                            streamStatus = "Error: $message"
 
                             if (!isRecording) {
-                                recordingStatus =
-                                    "Error: $message"
+                                recordingStatus = "Error: $message"
                             }
+
+                            updateAssistantState(AssistantState.Error)
                         }
                     }
 
                     override fun onDisconnected() {
                         mainHandler.post {
                             isStreamReady = false
-
-                            streamStatus =
-                                "Device stream disconnected"
+                            streamStatus = "Device stream disconnected"
+                            updateAssistantState(AssistantState.Idle)
                         }
                     }
                 }
@@ -459,7 +474,7 @@ fun FrankConversationHost(
 
     /*
      * Start continuous camera capture as soon as the assistant overlay is
-     * composed. The newest local JPEG is replaced approximately every second.
+     * composed. The newest local JPEg is replaced approximately every second.
      */
     DisposableEffect(
         cameraEnabled,
