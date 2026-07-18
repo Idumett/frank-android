@@ -1,7 +1,8 @@
 package com.idumet.frank
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.Crossfade
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -10,7 +11,11 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,9 +31,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -40,7 +47,7 @@ fun FrankAssistantScreen(
         mutableStateOf(AssistantState.Idle)
     }
 
-    var isVisible by remember {
+    var contentVisible by remember {
         mutableStateOf(false)
     }
 
@@ -48,12 +55,12 @@ fun FrankAssistantScreen(
         label = "FrankBackgroundAnimation"
     )
 
-    val gradientMovement by backgroundAnimation.animateFloat(
+    val backgroundMovement by backgroundAnimation.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
             animation = tween(
-                durationMillis = 9_000,
+                durationMillis = 10_000,
                 easing = FastOutSlowInEasing
             ),
             repeatMode = RepeatMode.Reverse
@@ -61,105 +68,204 @@ fun FrankAssistantScreen(
         label = "FrankBackgroundMovement"
     )
 
-    val statusText = when (assistantState) {
-        AssistantState.Idle ->
-            "Ready"
-
-        AssistantState.Listening ->
-            "Listening..."
-
-        AssistantState.Thinking ->
-            "Thinking..."
-
-        AssistantState.Speaking ->
-            "Speaking..."
-
-        AssistantState.Error ->
-            "Sorry, I didn't catch that."
-    }
-
-    val backgroundColors = listOf(
-        Color(
-            red = 0.01f + gradientMovement * 0.01f,
-            green = 0.03f,
-            blue = 0.09f + gradientMovement * 0.03f
+    val backgroundGlow by backgroundAnimation.animateFloat(
+        initialValue = 0.72f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(
+                durationMillis = 4_800,
+                easing = FastOutSlowInEasing
+            ),
+            repeatMode = RepeatMode.Reverse
         ),
-        Color(
-            red = 0.05f,
-            green = 0.09f + gradientMovement * 0.02f,
-            blue = 0.17f
-        ),
-        Color(
-            red = 0.07f + gradientMovement * 0.02f,
-            green = 0.09f,
-            blue = 0.15f
-        )
+        label = "FrankBackgroundGlow"
     )
 
+    val statusText = when (assistantState) {
+        AssistantState.Idle ->
+            "READY"
+
+        AssistantState.Listening ->
+            "LISTENING"
+
+        AssistantState.Thinking ->
+            "THINKING"
+
+        AssistantState.Speaking ->
+            "SPEAKING"
+
+        AssistantState.Error ->
+            "PLEASE TRY AGAIN"
+    }
+
+    val statusSubtitle = when (assistantState) {
+        AssistantState.Idle ->
+            "Frank is ready"
+
+        AssistantState.Listening ->
+            "Speak naturally"
+
+        AssistantState.Thinking ->
+            "Understanding your request"
+
+        AssistantState.Speaking ->
+            "Frank is responding"
+
+        AssistantState.Error ->
+            "Something interrupted the request"
+    }
+
+    val stateGlowColor = when (assistantState) {
+        AssistantState.Idle ->
+            Color(0xFF2563EB)
+
+        AssistantState.Listening ->
+            Color(0xFF06B6D4)
+
+        AssistantState.Thinking ->
+            Color(0xFF8B5CF6)
+
+        AssistantState.Speaking ->
+            Color(0xFF10B981)
+
+        AssistantState.Error ->
+            Color(0xFFEF4444)
+    }
+
     LaunchedEffect(Unit) {
-        isVisible = true
+        contentVisible = true
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(
-                Brush.verticalGradient(
-                    colors = backgroundColors
+                Brush.linearGradient(
+                    colors = listOf(
+                        Color(0xFF010409),
+                        Color(0xFF06101F),
+                        Color(0xFF020617),
+                        Color(0xFF00030A)
+                    ),
+                    start = Offset(
+                        x = backgroundMovement * 900f,
+                        y = 0f
+                    ),
+                    end = Offset(
+                        x = 900f - backgroundMovement * 500f,
+                        y = 1_900f
+                    )
                 )
-            )
-            .padding(24.dp),
+            ),
         contentAlignment = Alignment.Center
     ) {
-        AnimatedVisibility(
-            visible = isVisible,
-            enter = fadeIn(
-                animationSpec = tween(
-                    durationMillis = 350
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(
+                            stateGlowColor.copy(
+                                alpha = 0.13f * backgroundGlow
+                            ),
+                            stateGlowColor.copy(
+                                alpha = 0.045f
+                            ),
+                            Color.Transparent
+                        ),
+                        center = Offset(
+                            x = 540f + backgroundMovement * 80f,
+                            y = 850f - backgroundMovement * 70f
+                        ),
+                        radius = 1_000f
+                    )
                 )
+        )
+
+        AnimatedVisibility(
+            visible = contentVisible,
+            enter = fadeIn(
+                animationSpec = tween(550)
             ) + scaleIn(
-                initialScale = 0.82f,
+                initialScale = 0.72f,
                 animationSpec = spring(
-                    dampingRatio = 0.78f,
-                    stiffness = 320f
+                    dampingRatio = 0.76f,
+                    stiffness = 260f
                 )
             )
         ) {
             Column(
-                horizontalAlignment =
-                    Alignment.CenterHorizontally,
-                verticalArrangement =
-                    Arrangement.Center
+                modifier = Modifier.padding(
+                    horizontal = 20.dp,
+                    vertical = 24.dp
+                ),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
             ) {
-                Text(
-                    text = "FRANK",
-                    color = Color.White,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = 6.sp
-                )
-
                 FrankEye(
-                    state = assistantState,
-                    modifier = Modifier.padding(
-                        top = 32.dp,
-                        bottom = 24.dp
-                    )
+                    state = assistantState
                 )
 
-                Crossfade(
+                AnimatedContent(
                     targetState = statusText,
-                    animationSpec = tween(
-                        durationMillis = 250
-                    ),
+                    transitionSpec = {
+                        (
+                                fadeIn(
+                                    animationSpec = tween(260)
+                                ) + slideInVertically {
+                                    it / 3
+                                }
+                                ).togetherWith(
+                                fadeOut(
+                                    animationSpec = tween(180)
+                                ) + slideOutVertically {
+                                    -it / 3
+                                }
+                            ).using(
+                                SizeTransform(
+                                    clip = false
+                                )
+                            )
+                    },
                     label = "FrankStatusTransition"
                 ) { text ->
                     Text(
                         text = text,
                         color = Color.White.copy(
-                            alpha = 0.85f
+                            alpha = 0.94f
                         ),
-                        fontSize = 18.sp
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                        letterSpacing = 5.sp,
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                AnimatedContent(
+                    targetState = statusSubtitle,
+                    transitionSpec = {
+                        fadeIn(
+                            animationSpec = tween(320)
+                        ).togetherWith(
+                            fadeOut(
+                                animationSpec = tween(180)
+                            )
+                        )
+                    },
+                    label = "FrankSubtitleTransition"
+                ) { text ->
+                    Text(
+                        text = text,
+                        modifier = Modifier.padding(
+                            top = 10.dp
+                        ),
+                        color = Color.White.copy(
+                            alpha = 0.46f
+                        ),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Normal,
+                        letterSpacing = 0.4.sp,
+                        textAlign = TextAlign.Center
                     )
                 }
 

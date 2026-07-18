@@ -5,6 +5,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
@@ -23,11 +24,6 @@ fun ConversationControls(
     onTestServer: () -> Unit,
     onClose: () -> Unit
 ) {
-    /*
-     * The assistant overlay passes both flags as false.
-     * That means technical controls and statuses remain available on the
-     * development screen, but are hidden from the polished assistant UI.
-     */
     val showDeveloperControls =
         showConnectButton ||
                 showServerHealthControls
@@ -96,11 +92,16 @@ fun ConversationControls(
     if (showCloseButton) {
         TextButton(
             modifier = Modifier.padding(
-                top = 24.dp
+                top = 30.dp
             ),
             onClick = onClose
         ) {
-            Text("Close")
+            Text(
+                text = "Close",
+                color = Color.White.copy(
+                    alpha = 0.34f
+                )
+            )
         }
     }
 }

@@ -52,9 +52,22 @@ fun FrankConversationHost(
         FrankAudioPlayer(context.applicationContext)
     }
 
+    val haptics = remember {
+        FrankHaptics(context.applicationContext)
+    }
+
+    var lastHapticState by remember {
+        mutableStateOf<AssistantState?>(null)
+    }
+
     fun updateAssistantState(
         state: AssistantState
     ) {
+        if (lastHapticState != state) {
+            lastHapticState = state
+            haptics.performStateCue(state)
+        }
+
         onAssistantStateChanged(state)
     }
 
