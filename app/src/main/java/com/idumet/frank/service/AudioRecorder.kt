@@ -7,47 +7,75 @@ import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.audiofx.NoiseSuppressor
 import androidx.core.content.ContextCompat
 import java.io.File
-import java.io.RandomAccessFile
+import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.concurrent.thread
 
 class AudioRecorder(
     private val context: Context
 ) {
 
+    companion object {
+        const val SAMPLE_RATE = 16_000
+
+        private const val CHANNEL_CONFIG =
+            AudioFormat.CHANNEL_IN_MONO
+
+        private const val AUDIO_FORMAT =
+            AudioFormat.ENCODING_PCM_16BIT
+
+        private const val BITS_PER_SAMPLE = 16
+        private const val CHANNEL_COUNT = 1
+    }
+
+    private val recording =
+        AtomicBoolean(false)
+
     private var audioRecord: AudioRecord? = null
     private var recordingThread: Thread? = null
-    private var outputFile: File? = null
+    private var noiseSuppressor: NoiseSuppressor? = null
 
-    private val recording = AtomicBoolean(false)
+    private var pcmFile: File? = null
+    private var wavFile: File? = null
+
+    private var audioSampleListener:
+            ((ShortArray, Int) -> Unit)? = null
+
+    val isRecording: Boolean
+        get() = recording.get()
+
+    fun setAudioSampleListener(
+        listener: ((ShortArray, Int) -> Unit)?
+    ) {
+        audioSampleListener = listener
+    }
 
     @SuppressLint("MissingPermission")
-    fun start(): File {
-        check(!recording.get()) {
-            "Audio recording is already running"
+    fun start() {
+        if (recording.get()) {
+            return
         }
 
-        check(
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.RECORD_AUDIO
-            ) == PackageManager.PERMISSION_GRANTED
-        ) {
-            "Microphone permission has not been granted"
+        ensureMicrophonePermission()
+
+        val minimumBufferSize =
+            AudioRecord.getMinBufferSize(
+                SAMPLE_RATE,
+                CHANNEL_CONFIG,
+                AUDIO_FORMAT
+            )
+
+        if (minimumBufferSize <= 0) {
+            throw IllegalStateException(
+                "Unable to determine microphone buffer size"
+            )
         }
 
-        val minimumBufferSize = AudioRecord.getMinBufferSize(
-            SAMPLE_RATE,
-            CHANNEL_CONFIG,
-            AUDIO_FORMAT
-        )
-
-        check(minimumBufferSize > 0) {
-            "This device does not support the required audio format"
-        }
-
-        val bufferSize = minimumBufferSize * 2
+        val bufferSize =
+            minimumBufferSize * 2
 
         val recorder = AudioRecord(
             MediaRecorder.AudioSource.VOICE_RECOGNITION,
@@ -57,39 +85,47 @@ class AudioRecorder(
             bufferSize
         )
 
-        check(recorder.state == AudioRecord.STATE_INITIALIZED) {
+        if (
+            recorder.state !=
+            AudioRecord.STATE_INITIALIZED
+        ) {
             recorder.release()
-            "Failed to initialise microphone"
+
+            throw IllegalStateException(
+                "Unable to initialise microphone"
+            )
         }
 
-        val file = File(
-            context.cacheDir,
-            "frank_recording_${System.currentTimeMillis()}.wav"
+        val createdPcmFile = File.createTempFile(
+            "frank-recording-",
+            ".pcm",
+            context.cacheDir
         )
 
-        val randomAccessFile = RandomAccessFile(file, "rw").apply {
-            setLength(0)
-            write(ByteArray(WAV_HEADER_SIZE))
-        }
+        val createdWavFile = File(
+            context.cacheDir,
+            "frank-recording-${System.currentTimeMillis()}.wav"
+        )
 
         audioRecord = recorder
-        outputFile = file
-        recording.set(true)
+        pcmFile = createdPcmFile
+        wavFile = createdWavFile
 
+        enableNoiseSuppression(recorder)
+
+        recording.set(true)
         recorder.startRecording()
 
-        recordingThread = Thread {
-            writeAudioData(
+        recordingThread = thread(
+            name = "FrankAudioRecorder",
+            start = true
+        ) {
+            recordAudio(
                 recorder = recorder,
-                output = randomAccessFile,
+                outputFile = createdPcmFile,
                 bufferSize = bufferSize
             )
-        }.apply {
-            name = "FrankAudioRecorder"
-            start()
         }
-
-        return file
     }
 
     fun stop(): File? {
@@ -97,154 +133,308 @@ class AudioRecorder(
             return null
         }
 
-        val recorder = audioRecord
-        val file = outputFile
+        stopAudioRecord()
+        waitForRecordingThread()
 
-        try {
-            recorder?.stop()
-        } catch (_: IllegalStateException) {
-            // Recorder may already have stopped after an audio error.
+        val sourcePcmFile = pcmFile
+        val destinationWavFile = wavFile
+
+        releaseRecorder()
+
+        if (
+            sourcePcmFile == null ||
+            destinationWavFile == null ||
+            !sourcePcmFile.exists() ||
+            sourcePcmFile.length() == 0L
+        ) {
+            cleanupFiles()
+            return null
         }
 
-        recordingThread?.join()
+        writeWavFile(
+            pcmFile = sourcePcmFile,
+            wavFile = destinationWavFile
+        )
 
-        recorder?.release()
+        sourcePcmFile.delete()
+        pcmFile = null
+        wavFile = null
 
-        audioRecord = null
-        recordingThread = null
-        outputFile = null
-
-        if (file == null || file.length() <= WAV_HEADER_SIZE) {
-            file?.delete()
-            throw IllegalStateException("No audio was recorded")
-        }
-
-        return file
+        return destinationWavFile
     }
 
     fun cancel() {
-        if (recording.compareAndSet(true, false)) {
-            try {
-                audioRecord?.stop()
-            } catch (_: IllegalStateException) {
-                // Ignore cleanup errors.
+        recording.set(false)
+
+        stopAudioRecord()
+        waitForRecordingThread()
+        releaseRecorder()
+        cleanupFiles()
+    }
+
+    private fun recordAudio(
+        recorder: AudioRecord,
+        outputFile: File,
+        bufferSize: Int
+    ) {
+        val shortBuffer =
+            ShortArray(bufferSize / 2)
+
+        try {
+            FileOutputStream(outputFile).use { output ->
+                while (recording.get()) {
+                    val sampleCount = recorder.read(
+                        shortBuffer,
+                        0,
+                        shortBuffer.size
+                    )
+
+                    if (sampleCount <= 0) {
+                        continue
+                    }
+
+                    writeShortSamples(
+                        output = output,
+                        samples = shortBuffer,
+                        sampleCount = sampleCount
+                    )
+
+                    val listenerCopy =
+                        shortBuffer.copyOf(sampleCount)
+
+                    audioSampleListener?.invoke(
+                        listenerCopy,
+                        sampleCount
+                    )
+                }
             }
+        } catch (_: Exception) {
+            recording.set(false)
+        }
+    }
+
+    private fun writeShortSamples(
+        output: FileOutputStream,
+        samples: ShortArray,
+        sampleCount: Int
+    ) {
+        val byteBuffer =
+            ByteArray(sampleCount * 2)
+
+        var byteIndex = 0
+
+        for (index in 0 until sampleCount) {
+            val sample = samples[index].toInt()
+
+            byteBuffer[byteIndex] =
+                (sample and 0xFF).toByte()
+
+            byteBuffer[byteIndex + 1] =
+                ((sample shr 8) and 0xFF).toByte()
+
+            byteIndex += 2
         }
 
-        recordingThread?.join()
+        output.write(byteBuffer)
+    }
+
+    private fun stopAudioRecord() {
+        try {
+            audioRecord?.stop()
+        } catch (_: IllegalStateException) {
+            // Recorder may already be stopped.
+        }
+    }
+
+    private fun waitForRecordingThread() {
+        try {
+            recordingThread?.join(1_500)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+
+        recordingThread = null
+    }
+
+    private fun releaseRecorder() {
+        noiseSuppressor?.release()
+        noiseSuppressor = null
 
         audioRecord?.release()
         audioRecord = null
-        recordingThread = null
 
-        outputFile?.delete()
-        outputFile = null
+        audioSampleListener = null
     }
 
-    fun isRecording(): Boolean = recording.get()
+    private fun cleanupFiles() {
+        pcmFile?.delete()
+        wavFile?.delete()
 
-    private fun writeAudioData(
-        recorder: AudioRecord,
-        output: RandomAccessFile,
-        bufferSize: Int
+        pcmFile = null
+        wavFile = null
+    }
+
+    private fun enableNoiseSuppression(
+        recorder: AudioRecord
     ) {
-        val samples = ShortArray(bufferSize / 2)
-        var audioBytesWritten = 0L
+        if (!NoiseSuppressor.isAvailable()) {
+            return
+        }
 
-        try {
-            while (recording.get()) {
-                val samplesRead = recorder.read(
-                    samples,
-                    0,
-                    samples.size,
-                    AudioRecord.READ_BLOCKING
-                )
-
-                if (samplesRead <= 0) {
-                    continue
-                }
-
-                for (index in 0 until samplesRead) {
-                    val sample = samples[index].toInt()
-
-                    // WAV PCM data is little-endian.
-                    output.write(sample and 0xFF)
-                    output.write(sample shr 8 and 0xFF)
-                }
-
-                audioBytesWritten += samplesRead * BYTES_PER_SAMPLE
+        noiseSuppressor =
+            NoiseSuppressor.create(
+                recorder.audioSessionId
+            )?.apply {
+                enabled = true
             }
+    }
 
-            writeWavHeader(
-                output = output,
-                audioDataSize = audioBytesWritten
+    private fun ensureMicrophonePermission() {
+        val permissionGranted =
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+
+        if (!permissionGranted) {
+            throw SecurityException(
+                "Microphone permission has not been granted"
             )
-        } finally {
-            output.close()
         }
     }
 
-    private fun writeWavHeader(
-        output: RandomAccessFile,
-        audioDataSize: Long
+    private fun writeWavFile(
+        pcmFile: File,
+        wavFile: File
     ) {
+        val pcmData = pcmFile.readBytes()
+        val dataSize = pcmData.size
         val byteRate =
-            SAMPLE_RATE * CHANNEL_COUNT * BITS_PER_SAMPLE / 8
+            SAMPLE_RATE *
+                    CHANNEL_COUNT *
+                    BITS_PER_SAMPLE / 8
 
-        val totalDataSize = audioDataSize + 36
+        FileOutputStream(wavFile).use { output ->
+            output.write(
+                createWavHeader(
+                    dataSize = dataSize,
+                    byteRate = byteRate
+                )
+            )
 
-        output.seek(0)
-
-        output.writeBytes("RIFF")
-        writeLittleEndianInt(output, totalDataSize.toInt())
-        output.writeBytes("WAVE")
-
-        output.writeBytes("fmt ")
-        writeLittleEndianInt(output, 16)
-        writeLittleEndianShort(output, 1) // PCM format
-        writeLittleEndianShort(output, CHANNEL_COUNT)
-        writeLittleEndianInt(output, SAMPLE_RATE)
-        writeLittleEndianInt(output, byteRate)
-
-        val blockAlign =
-            CHANNEL_COUNT * BITS_PER_SAMPLE / 8
-
-        writeLittleEndianShort(output, blockAlign)
-        writeLittleEndianShort(output, BITS_PER_SAMPLE)
-
-        output.writeBytes("data")
-        writeLittleEndianInt(output, audioDataSize.toInt())
+            output.write(pcmData)
+        }
     }
 
-    private fun writeLittleEndianInt(
-        output: RandomAccessFile,
+    private fun createWavHeader(
+        dataSize: Int,
+        byteRate: Int
+    ): ByteArray {
+        val header = ByteArray(44)
+
+        writeAscii(header, 0, "RIFF")
+        writeIntLittleEndian(
+            header,
+            4,
+            36 + dataSize
+        )
+
+        writeAscii(header, 8, "WAVE")
+        writeAscii(header, 12, "fmt ")
+
+        writeIntLittleEndian(
+            header,
+            16,
+            16
+        )
+
+        writeShortLittleEndian(
+            header,
+            20,
+            1
+        )
+
+        writeShortLittleEndian(
+            header,
+            22,
+            CHANNEL_COUNT
+        )
+
+        writeIntLittleEndian(
+            header,
+            24,
+            SAMPLE_RATE
+        )
+
+        writeIntLittleEndian(
+            header,
+            28,
+            byteRate
+        )
+
+        writeShortLittleEndian(
+            header,
+            32,
+            CHANNEL_COUNT *
+                    BITS_PER_SAMPLE / 8
+        )
+
+        writeShortLittleEndian(
+            header,
+            34,
+            BITS_PER_SAMPLE
+        )
+
+        writeAscii(header, 36, "data")
+
+        writeIntLittleEndian(
+            header,
+            40,
+            dataSize
+        )
+
+        return header
+    }
+
+    private fun writeAscii(
+        target: ByteArray,
+        offset: Int,
+        value: String
+    ) {
+        value.toByteArray(Charsets.US_ASCII)
+            .copyInto(
+                destination = target,
+                destinationOffset = offset
+            )
+    }
+
+    private fun writeIntLittleEndian(
+        target: ByteArray,
+        offset: Int,
         value: Int
     ) {
-        output.write(value and 0xFF)
-        output.write(value shr 8 and 0xFF)
-        output.write(value shr 16 and 0xFF)
-        output.write(value shr 24 and 0xFF)
+        target[offset] =
+            (value and 0xFF).toByte()
+
+        target[offset + 1] =
+            ((value shr 8) and 0xFF).toByte()
+
+        target[offset + 2] =
+            ((value shr 16) and 0xFF).toByte()
+
+        target[offset + 3] =
+            ((value shr 24) and 0xFF).toByte()
     }
 
-    private fun writeLittleEndianShort(
-        output: RandomAccessFile,
+    private fun writeShortLittleEndian(
+        target: ByteArray,
+        offset: Int,
         value: Int
     ) {
-        output.write(value and 0xFF)
-        output.write(value shr 8 and 0xFF)
-    }
+        target[offset] =
+            (value and 0xFF).toByte()
 
-    companion object {
-        private const val SAMPLE_RATE = 16_000
-        private const val CHANNEL_COUNT = 1
-        private const val BITS_PER_SAMPLE = 16
-        private const val BYTES_PER_SAMPLE = 2
-        private const val WAV_HEADER_SIZE = 44
-
-        private const val CHANNEL_CONFIG =
-            AudioFormat.CHANNEL_IN_MONO
-
-        private const val AUDIO_FORMAT =
-            AudioFormat.ENCODING_PCM_16BIT
+        target[offset + 1] =
+            ((value shr 8) and 0xFF).toByte()
     }
 }
