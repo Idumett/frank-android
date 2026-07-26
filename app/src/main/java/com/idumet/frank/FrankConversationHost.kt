@@ -439,6 +439,16 @@ fun FrankConversationHost(
                                 onCompleted = {
                                     recordingStatus = "Ready"
                                     updateAssistantState(AssistantState.Idle)
+
+                                    //restart recording for follow up query
+                                    mainHandler.postDelayed({
+                                        if (!isRecording && isStreamReady) {
+                                            recordingStatus = "Listening..."
+                                            updateAssistantState(AssistantState.Listening)
+                                            startRecording(true);
+                                        }
+
+                                    }, 450)
                                 },
                                 onError = { message ->
                                     recordingStatus = message
