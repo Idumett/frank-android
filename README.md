@@ -1,3 +1,4 @@
+
 # Frank Android Assistant
 
 Frank is a native Android AI assistant that captures voice and vision, streams them to the Frank server, and speaks the response back to the user.
@@ -214,3 +215,11 @@ Current version includes:
 - Spoken AI responses
 
 The Android proof of concept is feature-complete and ready for demonstration.
+
+## Copyright
+
+This repository is published to showcase the project and its implementation.
+
+All source code remains the intellectual property of Hilary Asogwa. No permission is granted to copy, modify, redistribute, or use this software without prior written consent.
+
+© 2026 Hilary Asogwa. All Rights Reserved.
