@@ -5,6 +5,8 @@ Frank is a native Android AI assistant that captures voice and vision, streams t
 
 This project serves as the Android frontend for the Frank ecosystem.
 
+<img width="1774" height="887" alt="android_ss" src="https://github.com/user-attachments/assets/a88698a7-8474-4bcf-ad76-790b2aa79cf4" />
+
 ---
 
 # Features
