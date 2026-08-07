@@ -1,4 +1,13 @@
 val cameraXVersion = "1.6.1"
+val frankServerUrl = providers.gradleProperty("frankServerUrl")
+    .orElse("http://192.168.0.83:3000/")
+    .get()
+val frankDemoToken = providers.gradleProperty("frankDemoToken")
+    .orElse("")
+    .get()
+
+fun quotedBuildValue(value: String): String =
+    "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
 plugins {
     alias(libs.plugins.android.application)
@@ -21,6 +30,8 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "FRANK_SERVER_URL", quotedBuildValue(frankServerUrl))
+        buildConfigField("String", "FRANK_DEMO_TOKEN", quotedBuildValue(frankDemoToken))
     }
 
     buildTypes {
@@ -38,6 +49,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

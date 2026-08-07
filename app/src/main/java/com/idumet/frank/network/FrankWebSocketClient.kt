@@ -1,5 +1,7 @@
 package com.idumet.frank.network
 
+import com.idumet.frank.BuildConfig
+
 import android.util.Base64
 import com.google.gson.Gson
 import com.google.gson.JsonParser
@@ -72,7 +74,12 @@ class FrankWebSocketClient(
 
         val request =
             Request.Builder()
-                .url(DEVICE_STREAM_URL)
+                .url(deviceStreamUrl())
+                .apply {
+                    if (BuildConfig.FRANK_DEMO_TOKEN.isNotBlank()) {
+                        header("Authorization", "Bearer ${BuildConfig.FRANK_DEMO_TOKEN}")
+                    }
+                }
                 .build()
 
         webSocket =
@@ -454,7 +461,14 @@ class FrankWebSocketClient(
     companion object {
         private const val WAV_HEADER_SIZE = 44L
 
-        private const val DEVICE_STREAM_URL =
-            "ws://192.168.0.83:3000/v1/device/stream"
+        private fun deviceStreamUrl(): String {
+            val serverUrl = BuildConfig.FRANK_SERVER_URL.trimEnd('/')
+            val websocketBase = when {
+                serverUrl.startsWith("https://") -> "wss://${serverUrl.removePrefix("https://")}"
+                serverUrl.startsWith("http://") -> "ws://${serverUrl.removePrefix("http://")}"
+                else -> error("Frank server URL must start with http:// or https://")
+            }
+            return "$websocketBase/v1/device/stream"
+        }
     }
 }
