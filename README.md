@@ -225,3 +225,7 @@ This repository is published to showcase the project and its implementation.
 All source code remains the intellectual property of Hilary Asogwa. No permission is granted to copy, modify, redistribute, or use this software without prior written consent.
 
 © 2026 Hilary Asogwa. All Rights Reserved.
+
+## Device diagnostics
+
+Each spoken request has its own request ID across the camera frame, audio upload and server response. Filter Logcat by `FrankDiagnostics` to see frame acknowledgements and the reply and audio round-trip times for that request.

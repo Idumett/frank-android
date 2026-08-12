@@ -2,7 +2,9 @@ package com.idumet.frank.network
 
 import com.idumet.frank.BuildConfig
 
+import android.os.SystemClock
 import android.util.Base64
+import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonParser
 import okhttp3.OkHttpClient
@@ -11,7 +13,9 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import java.io.File
+import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -35,9 +39,11 @@ class FrankWebSocketClient(
 
     private data class DeviceFrameMessage(
         val type: String = "frame",
+        val trace: DeviceTrace,
         val seq: Int,
         val mime: String,
-        val bytesBase64: String
+        val bytesBase64: String,
+        val capturedAt: String
     )
 
     private val gson = Gson()
@@ -56,6 +62,9 @@ class FrankWebSocketClient(
 
     private val frameSequence =
         AtomicInteger(0)
+
+    private val requestStartedAt =
+        ConcurrentHashMap<String, Long>()
 
     private var webSocket: WebSocket? = null
 
@@ -167,7 +176,8 @@ class FrankWebSocketClient(
      * @return the frame sequence number.
      */
     fun sendFrame(
-        file: File
+        file: File,
+        trace: DeviceTrace
     ): Int {
         check(isReady) {
             "Frank device stream is not ready"
@@ -195,9 +205,13 @@ class FrankWebSocketClient(
 
         val message =
             DeviceFrameMessage(
+                trace = trace,
                 seq = sequence,
                 mime = mimeType,
-                bytesBase64 = frameBase64
+                bytesBase64 = frameBase64,
+                capturedAt = Instant.ofEpochMilli(
+                    file.lastModified()
+                ).toString()
             )
 
         val sent =
@@ -211,11 +225,17 @@ class FrankWebSocketClient(
             )
         }
 
+        Log.d(
+            LOG_TAG,
+            "frame_sent requestId=${trace.requestId} seq=$sequence bytes=${file.length()}"
+        )
+
         return sequence
     }
 
     fun sendAudio(
-        file: File
+        file: File,
+        trace: DeviceTrace
     ) {
         check(isReady) {
             "Frank device stream is not ready"
@@ -236,7 +256,9 @@ class FrankWebSocketClient(
 
         val message =
             DeviceAudioMessage(
-                audioBase64 = audioBase64
+                trace = trace,
+                audioBase64 = audioBase64,
+                sentAt = Instant.now().toString()
             )
 
         val sent =
@@ -249,6 +271,11 @@ class FrankWebSocketClient(
                 "Failed to send audio to Frank"
             )
         }
+
+        Log.d(
+            LOG_TAG,
+            "audio_sent requestId=${trace.requestId} bytes=${file.length()}"
+        )
     }
 
     /**
@@ -260,18 +287,30 @@ class FrankWebSocketClient(
     fun sendRequest(
         audioFile: File,
         imageFile: File?
-    ): Int? {
-        val frameSequence =
+    ): String {
+        val trace =
+            DeviceTrace(
+                requestId = createRequestId(),
+                sessionId = sessionId
+            )
+
+        requestStartedAt[trace.requestId] =
+            SystemClock.elapsedRealtime()
+
+        try {
             imageFile
                 ?.takeIf {
                     it.exists() &&
                             it.length() > 0L
                 }
-                ?.let(::sendFrame)
+                ?.let { sendFrame(it, trace) }
 
-        sendAudio(audioFile)
-
-        return frameSequence
+            sendAudio(audioFile, trace)
+            return trace.requestId
+        } catch (exception: Exception) {
+            requestStartedAt.remove(trace.requestId)
+            throw exception
+        }
     }
 
     private fun sendHello(
@@ -321,6 +360,7 @@ class FrankWebSocketClient(
             when (type) {
                 "ready" -> {
                     isReady = true
+                    Log.d(LOG_TAG, "stream_ready sessionId=$sessionId")
                     listener.onReady()
                 }
 
@@ -331,6 +371,7 @@ class FrankWebSocketClient(
                             ?.asInt
 
                     if (sequence != null) {
+                        Log.d(LOG_TAG, "frame_ack seq=$sequence")
                         listener.onFrameAcknowledged(
                             sequence
                         )
@@ -354,6 +395,8 @@ class FrankWebSocketClient(
                 }
 
                 "meta" -> {
+                    logRoundTrip(jsonObject, "reply_received")
+
                     val reply =
                         jsonObject
                             .getAsJsonObject("reply")
@@ -369,6 +412,8 @@ class FrankWebSocketClient(
                 }
 
                 "audio" -> {
+                    logRoundTrip(jsonObject, "audio_received", complete = true)
+
                     val bytesBase64 =
                         jsonObject
                             .get("bytesBase64")
@@ -394,6 +439,9 @@ class FrankWebSocketClient(
                             ?.asString
                             ?: "Unknown Frank server error"
 
+                    val requestId = requestId(jsonObject)
+                    Log.e(LOG_TAG, "server_error requestId=$requestId message=$message")
+                    if (requestId != null) requestStartedAt.remove(requestId)
                     listener.onError(message)
                 }
 
@@ -414,6 +462,27 @@ class FrankWebSocketClient(
             )
         }
     }
+
+    private fun logRoundTrip(
+        jsonObject: com.google.gson.JsonObject,
+        event: String,
+        complete: Boolean = false
+    ) {
+        val requestId = requestId(jsonObject) ?: return
+        val startedAt = requestStartedAt[requestId] ?: return
+        val elapsedMs = SystemClock.elapsedRealtime() - startedAt
+        Log.d(LOG_TAG, "$event requestId=$requestId elapsedMs=$elapsedMs")
+        if (complete) requestStartedAt.remove(requestId)
+    }
+
+    private fun requestId(
+        jsonObject: com.google.gson.JsonObject
+    ): String? =
+        jsonObject
+            .getAsJsonObject("trace")
+            ?.get("requestId")
+            ?.takeUnless { it.isJsonNull }
+            ?.asString
 
     fun disconnect() {
         isReady = false
@@ -459,6 +528,7 @@ class FrankWebSocketClient(
     }
 
     companion object {
+        private const val LOG_TAG = "FrankDiagnostics"
         private const val WAV_HEADER_SIZE = 44L
 
         private fun deviceStreamUrl(): String {
