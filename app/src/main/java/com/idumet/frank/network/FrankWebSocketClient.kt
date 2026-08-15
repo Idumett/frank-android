@@ -2,6 +2,8 @@ package com.idumet.frank.network
 
 import com.idumet.frank.BuildConfig
 
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Base64
 import android.util.Log
@@ -66,6 +68,10 @@ class FrankWebSocketClient(
     private val requestStartedAt =
         ConcurrentHashMap<String, Long>()
 
+    private val mainHandler =
+        Handler(Looper.getMainLooper())
+
+    @Volatile
     private var webSocket: WebSocket? = null
 
     private var sessionId: String =
@@ -74,8 +80,24 @@ class FrankWebSocketClient(
     @Volatile
     private var isReady = false
 
+    @Volatile
+    private var keepConnected = false
+
+    private var reconnectAttempt = 0
+
+    private val reconnect = Runnable {
+        openSocket()
+    }
+
     fun connect() {
-        if (webSocket != null) {
+        keepConnected = true
+        mainHandler.removeCallbacks(reconnect)
+        openSocket()
+    }
+
+    @Synchronized
+    private fun openSocket() {
+        if (!keepConnected || webSocket != null) {
             return
         }
 
@@ -91,77 +113,89 @@ class FrankWebSocketClient(
                 }
                 .build()
 
-        webSocket =
-            client.newWebSocket(
-                request,
-                object : WebSocketListener() {
-
-                    override fun onOpen(
-                        webSocket: WebSocket,
-                        response: Response
+        val socketListener =
+            object : WebSocketListener() {
+                override fun onOpen(
+                    webSocket: WebSocket,
+                    response: Response
+                ) {
+                    if (
+                        this@FrankWebSocketClient.webSocket === webSocket &&
+                        keepConnected
                     ) {
                         sendHello(webSocket)
-                    }
-
-                    override fun onMessage(
-                        webSocket: WebSocket,
-                        text: String
-                    ) {
-                        handleMessage(text)
-                    }
-
-                    override fun onClosing(
-                        webSocket: WebSocket,
-                        code: Int,
-                        reason: String
-                    ) {
-                        webSocket.close(
-                            code,
-                            reason
-                        )
-                    }
-
-                    override fun onClosed(
-                        webSocket: WebSocket,
-                        code: Int,
-                        reason: String
-                    ) {
-                        isReady = false
-
-                        this@FrankWebSocketClient
-                            .webSocket = null
-
-                        listener.onDisconnected()
-                    }
-
-                    override fun onFailure(
-                        webSocket: WebSocket,
-                        throwable: Throwable,
-                        response: Response?
-                    ) {
-                        isReady = false
-
-                        this@FrankWebSocketClient
-                            .webSocket = null
-
-                        val message =
-                            buildString {
-                                append(
-                                    throwable.message
-                                        ?: "WebSocket connection failed"
-                                )
-
-                                if (response != null) {
-                                    append(
-                                        " (HTTP ${response.code})"
-                                    )
-                                }
-                            }
-
-                        listener.onError(message)
+                    } else {
+                        webSocket.close(1000, "Connection no longer needed")
                     }
                 }
-            )
+
+                override fun onMessage(
+                    webSocket: WebSocket,
+                    text: String
+                ) {
+                    if (this@FrankWebSocketClient.webSocket === webSocket) {
+                        handleMessage(text)
+                    }
+                }
+
+                override fun onClosing(
+                    webSocket: WebSocket,
+                    code: Int,
+                    reason: String
+                ) {
+                    webSocket.close(code, reason)
+                }
+
+                override fun onClosed(
+                    webSocket: WebSocket,
+                    code: Int,
+                    reason: String
+                ) {
+                    connectionEnded(webSocket)
+                }
+
+                override fun onFailure(
+                    webSocket: WebSocket,
+                    throwable: Throwable,
+                    response: Response?
+                ) {
+                    response?.close()
+                    val message =
+                        buildString {
+                            append(throwable.message ?: "WebSocket connection failed")
+                            if (response != null) append(" (HTTP ${response.code})")
+                        }
+                    Log.w(LOG_TAG, "stream_failed message=$message")
+                    listener.onError(message)
+                    connectionEnded(webSocket)
+                }
+            }
+
+        webSocket = client.newWebSocket(request, socketListener)
+    }
+
+    @Synchronized
+    private fun connectionEnded(
+        endedSocket: WebSocket
+    ) {
+        if (webSocket !== endedSocket) {
+            return
+        }
+
+        webSocket = null
+        isReady = false
+        requestStartedAt.clear()
+        listener.onDisconnected()
+
+        if (keepConnected) {
+            val delayMs =
+                RetryDelay.milliseconds(
+                    reconnectAttempt++
+                )
+            Log.d(LOG_TAG, "stream_reconnect delayMs=$delayMs")
+            mainHandler.removeCallbacks(reconnect)
+            mainHandler.postDelayed(reconnect, delayMs)
+        }
     }
 
     /**
@@ -359,6 +393,7 @@ class FrankWebSocketClient(
 
             when (type) {
                 "ready" -> {
+                    reconnectAttempt = 0
                     isReady = true
                     Log.d(LOG_TAG, "stream_ready sessionId=$sessionId")
                     listener.onReady()
@@ -484,15 +519,20 @@ class FrankWebSocketClient(
             ?.takeUnless { it.isJsonNull }
             ?.asString
 
+    @Synchronized
     fun disconnect() {
+        keepConnected = false
         isReady = false
+        reconnectAttempt = 0
+        requestStartedAt.clear()
+        mainHandler.removeCallbacks(reconnect)
 
-        webSocket?.close(
+        val socket = webSocket
+        webSocket = null
+        socket?.close(
             1000,
             "Android client closed"
         )
-
-        webSocket = null
     }
 
     private fun determineImageMimeType(
