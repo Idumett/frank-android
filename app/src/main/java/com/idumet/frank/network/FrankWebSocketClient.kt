@@ -519,6 +519,16 @@ class FrankWebSocketClient(
             ?.takeUnless { it.isJsonNull }
             ?.asString
 
+    fun stop() {
+        val sent = webSocket?.send(
+            gson.toJson(mapOf("type" to "stop"))
+        ) == true
+
+        if (!sent && isReady) {
+            listener.onError("Failed to stop the active Frank request")
+        }
+    }
+
     @Synchronized
     fun disconnect() {
         keepConnected = false

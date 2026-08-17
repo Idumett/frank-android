@@ -121,6 +121,14 @@ fun FrankConversationHost(
         AtomicBoolean(false)
     }
 
+    val sessionOpen = remember {
+        AtomicBoolean(true)
+    }
+
+    var requestInFlight by remember {
+        mutableStateOf(false)
+    }
+
     val camera = remember {
         FrankCamera(
             context = context.applicationContext,
@@ -235,6 +243,7 @@ fun FrankConversationHost(
                     )
                 }
 
+                requestInFlight = true
                 recordingStatus = "Thinking..."
             } catch (exception: Exception) {
                 isRecording = false
@@ -429,6 +438,7 @@ fun FrankConversationHost(
                         bytesBase64: String
                     ) {
                         mainHandler.post {
+                            requestInFlight = false
                             recordingStatus = "Preparing Frank's response..."
                             updateAssistantState(AssistantState.Thinking)
 
@@ -444,7 +454,11 @@ fun FrankConversationHost(
 
                                     //restart recording for follow up query
                                     mainHandler.postDelayed({
-                                        if (!isRecording && isStreamReady) {
+                                        if (
+                                            sessionOpen.get() &&
+                                            !isRecording &&
+                                            isStreamReady
+                                        ) {
                                             recordingStatus = "Listening..."
                                             updateAssistantState(AssistantState.Listening)
                                             startRecording(true);
@@ -476,6 +490,7 @@ fun FrankConversationHost(
                         message: String
                     ) {
                         mainHandler.post {
+                            requestInFlight = false
                             streamStatus = "Error: $message"
 
                             if (!isRecording) {
@@ -489,6 +504,7 @@ fun FrankConversationHost(
                     override fun onDisconnected() {
                         mainHandler.post {
                             isStreamReady = false
+                            requestInFlight = false
                             hasAutoStarted = false
                             clearSilenceDetection()
 
@@ -505,6 +521,21 @@ fun FrankConversationHost(
                     }
                 }
         )
+    }
+
+    DisposableEffect(audioRecorder) {
+        audioRecorder.setErrorListener { message ->
+            mainHandler.post {
+                isRecording = false
+                clearSilenceDetection()
+                recordingStatus = message
+                updateAssistantState(AssistantState.Error)
+            }
+        }
+
+        onDispose {
+            audioRecorder.setErrorListener(null)
+        }
     }
 
     /*
@@ -534,12 +565,19 @@ fun FrankConversationHost(
             LifecycleEventObserver { _, event ->
                 when (event) {
                     Lifecycle.Event.ON_START -> {
+                        sessionOpen.set(true)
                         if (autoConnect) {
                             webSocketClient.connect()
                         }
                     }
 
                     Lifecycle.Event.ON_STOP -> {
+                        sessionOpen.set(false)
+                        mainHandler.removeCallbacksAndMessages(null)
+                        if (requestInFlight) {
+                            webSocketClient.stop()
+                            requestInFlight = false
+                        }
                         hasAutoStarted = false
                         isStreamReady = false
                         clearSilenceDetection()
@@ -601,6 +639,12 @@ fun FrankConversationHost(
 
     DisposableEffect(Unit) {
         onDispose {
+            sessionOpen.set(false)
+            mainHandler.removeCallbacksAndMessages(null)
+            if (requestInFlight) {
+                webSocketClient.stop()
+                requestInFlight = false
+            }
             hasAutoStarted = false
 
             clearSilenceDetection()
