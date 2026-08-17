@@ -11,6 +11,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.idumet.frank.camera.FrankCamera
 import com.idumet.frank.network.FrankClient
@@ -487,7 +489,17 @@ fun FrankConversationHost(
                     override fun onDisconnected() {
                         mainHandler.post {
                             isStreamReady = false
-                            streamStatus = "Device stream disconnected"
+                            hasAutoStarted = false
+                            clearSilenceDetection()
+
+                            if (audioRecorder.isRecording) {
+                                audioRecorder.cancel()
+                            }
+
+                            isRecording = false
+                            audioPlayer.stop()
+                            streamStatus = "Connection lost. Reconnecting..."
+                            recordingStatus = "Waiting for Frank..."
                             updateAssistantState(AssistantState.Idle)
                         }
                     }
@@ -514,9 +526,52 @@ fun FrankConversationHost(
         }
     }
 
-    LaunchedEffect(autoConnect) {
-        if (autoConnect) {
+    DisposableEffect(
+        lifecycleOwner,
+        autoConnect
+    ) {
+        val observer =
+            LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_START -> {
+                        if (autoConnect) {
+                            webSocketClient.connect()
+                        }
+                    }
+
+                    Lifecycle.Event.ON_STOP -> {
+                        hasAutoStarted = false
+                        isStreamReady = false
+                        clearSilenceDetection()
+
+                        if (audioRecorder.isRecording) {
+                            audioRecorder.cancel()
+                        }
+
+                        isRecording = false
+                        audioPlayer.stop()
+                        webSocketClient.disconnect()
+                        streamStatus = "Device stream paused"
+                        recordingStatus = "Ready"
+                        updateAssistantState(AssistantState.Idle)
+                    }
+
+                    else -> Unit
+                }
+            }
+
+        lifecycleOwner.lifecycle.addObserver(observer)
+
+        if (
+            autoConnect &&
+            lifecycleOwner.lifecycle.currentState
+                .isAtLeast(Lifecycle.State.STARTED)
+        ) {
             webSocketClient.connect()
+        }
+
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
 
