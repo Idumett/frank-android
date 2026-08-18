@@ -1,8 +1,16 @@
+import java.util.Properties
+
 val cameraXVersion = "1.6.1"
+val localProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use(::load)
+}
 val frankServerUrl = providers.gradleProperty("frankServerUrl")
+    .orElse(providers.provider { localProperties.getProperty("frank.server.url") })
     .orElse("http://192.168.0.83:3000/")
     .get()
 val frankAccessToken = providers.gradleProperty("frankAccessToken")
+    .orElse(providers.provider { localProperties.getProperty("frank.access.token") })
     .orElse("")
     .get()
 
