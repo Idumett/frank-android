@@ -107,8 +107,8 @@ class FrankWebSocketClient(
             Request.Builder()
                 .url(deviceStreamUrl())
                 .apply {
-                    if (BuildConfig.FRANK_DEMO_TOKEN.isNotBlank()) {
-                        header("Authorization", "Bearer ${BuildConfig.FRANK_DEMO_TOKEN}")
+                    if (BuildConfig.FRANK_ACCESS_TOKEN.isNotBlank()) {
+                        header("Authorization", "Bearer ${BuildConfig.FRANK_ACCESS_TOKEN}")
                     }
                 }
                 .build()

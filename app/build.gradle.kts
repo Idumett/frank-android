@@ -2,7 +2,7 @@ val cameraXVersion = "1.6.1"
 val frankServerUrl = providers.gradleProperty("frankServerUrl")
     .orElse("http://192.168.0.83:3000/")
     .get()
-val frankDemoToken = providers.gradleProperty("frankDemoToken")
+val frankAccessToken = providers.gradleProperty("frankAccessToken")
     .orElse("")
     .get()
 
@@ -31,7 +31,7 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "FRANK_SERVER_URL", quotedBuildValue(frankServerUrl))
-        buildConfigField("String", "FRANK_DEMO_TOKEN", quotedBuildValue(frankDemoToken))
+        buildConfigField("String", "FRANK_ACCESS_TOKEN", quotedBuildValue(frankAccessToken))
     }
 
     buildTypes {
