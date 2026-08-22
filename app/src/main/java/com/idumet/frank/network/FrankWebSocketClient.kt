@@ -1,6 +1,7 @@
 package com.idumet.frank.network
 
 import com.idumet.frank.BuildConfig
+import com.idumet.frank.camera.CameraFrame
 
 import android.os.Handler
 import android.os.Looper
@@ -34,6 +35,10 @@ class FrankWebSocketClient(
         fun onError(message: String)
         fun onDisconnected()
 
+        fun onFrameRequested(trace: DeviceTrace, maxAgeMs: Long) {
+            // Optional callback for clients without a camera.
+        }
+
         fun onFrameAcknowledged(seq: Int) {
             // Optional callback.
         }
@@ -42,10 +47,13 @@ class FrankWebSocketClient(
     private data class DeviceFrameMessage(
         val type: String = "frame",
         val trace: DeviceTrace,
+        val frameId: String,
         val seq: Int,
         val mime: String,
         val bytesBase64: String,
-        val capturedAt: String
+        val capturedAt: String,
+        val ageMs: Long,
+        val quality: String
     )
 
     private val gson = Gson()
@@ -198,19 +206,9 @@ class FrankWebSocketClient(
         }
     }
 
-    /**
-     * Sends the latest camera image to Frank.
-     *
-     * The server stores this as the current frame and uses it when the
-     * following utterance or audio message is processed.
-     *
-     * WebSocket messages are delivered in order, so calling sendFrame()
-     * immediately before sendAudio() guarantees the frame arrives first.
-     *
-     * @return the frame sequence number.
-     */
+    /** Sends one frame after the server requests evidence for this turn. */
     fun sendFrame(
-        file: File,
+        frame: CameraFrame,
         trace: DeviceTrace
     ): Int {
         check(isReady) {
@@ -218,19 +216,19 @@ class FrankWebSocketClient(
         }
 
         check(
-            file.exists() &&
-                    file.isFile &&
-                    file.length() > 0L
+            frame.file.exists() &&
+                    frame.file.isFile &&
+                    frame.file.length() in 1..MAX_IMAGE_BYTES
         ) {
             "Camera frame is empty"
         }
 
         val mimeType =
-            determineImageMimeType(file)
+            determineImageMimeType(frame.file)
 
         val frameBase64 =
             Base64.encodeToString(
-                file.readBytes(),
+                frame.file.readBytes(),
                 Base64.NO_WRAP
             )
 
@@ -240,12 +238,13 @@ class FrankWebSocketClient(
         val message =
             DeviceFrameMessage(
                 trace = trace,
+                frameId = frame.frameId,
                 seq = sequence,
                 mime = mimeType,
                 bytesBase64 = frameBase64,
-                capturedAt = Instant.ofEpochMilli(
-                    file.lastModified()
-                ).toString()
+                capturedAt = Instant.ofEpochMilli(frame.capturedAtMs).toString(),
+                ageMs = (System.currentTimeMillis() - frame.capturedAtMs).coerceAtLeast(0L),
+                quality = frame.quality
             )
 
         val sent =
@@ -261,7 +260,7 @@ class FrankWebSocketClient(
 
         Log.d(
             LOG_TAG,
-            "frame_sent requestId=${trace.requestId} seq=$sequence bytes=${file.length()}"
+            "frame_sent requestId=${trace.requestId} frameId=${frame.frameId} seq=$sequence bytes=${frame.file.length()}"
         )
 
         return sequence
@@ -319,8 +318,7 @@ class FrankWebSocketClient(
      * working if camera permission is unavailable or no frame exists.
      */
     fun sendRequest(
-        audioFile: File,
-        imageFile: File?
+        audioFile: File
     ): String {
         val trace =
             DeviceTrace(
@@ -332,13 +330,6 @@ class FrankWebSocketClient(
             SystemClock.elapsedRealtime()
 
         try {
-            imageFile
-                ?.takeIf {
-                    it.exists() &&
-                            it.length() > 0L
-                }
-                ?.let { sendFrame(it, trace) }
-
             sendAudio(audioFile, trace)
             return trace.requestId
         } catch (exception: Exception) {
@@ -411,6 +402,12 @@ class FrankWebSocketClient(
                             sequence
                         )
                     }
+                }
+
+                "frame_required" -> {
+                    val trace = gson.fromJson(jsonObject.get("trace"), DeviceTrace::class.java)
+                    val maxAgeMs = jsonObject.get("maxAgeMs")?.asLong ?: DEFAULT_FRAME_MAX_AGE_MS
+                    listener.onFrameRequested(trace, maxAgeMs)
                 }
 
                 "transcript" -> {
@@ -580,6 +577,8 @@ class FrankWebSocketClient(
     companion object {
         private const val LOG_TAG = "FrankDiagnostics"
         private const val WAV_HEADER_SIZE = 44L
+        private const val MAX_IMAGE_BYTES = 8L * 1024L * 1024L
+        private const val DEFAULT_FRAME_MAX_AGE_MS = 4_000L
 
         private fun deviceStreamUrl(): String {
             val serverUrl = BuildConfig.FRANK_SERVER_URL.trimEnd('/')

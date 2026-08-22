@@ -193,7 +193,6 @@ fun FrankConversationHost(
 
         coroutineScope.launch {
             var audioFile: File? = null
-            var imageFile: File? = null
 
             try {
                 /*
@@ -215,31 +214,11 @@ fun FrankConversationHost(
                     return@launch
                 }
 
-                /*
-                 * copyLatestFrame() returns a separate temporary file.
-                 * The camera can therefore continue replacing its internal
-                 * latest frame safely.
-                 */
-                imageFile =
-                    if (cameraEnabled) {
-                        withContext(Dispatchers.IO) {
-                            camera.copyLatestFrame()
-                        }
-                    } else {
-                        null
-                    }
-
-                recordingStatus =
-                    if (imageFile != null) {
-                        "Sending audio and image..."
-                    } else {
-                        "Sending audio..."
-                    }
+                recordingStatus = "Sending audio..."
 
                 withContext(Dispatchers.IO) {
                     webSocketClient.sendRequest(
-                        audioFile = audioFile,
-                        imageFile = imageFile
+                        audioFile = audioFile
                     )
                 }
 
@@ -256,7 +235,7 @@ fun FrankConversationHost(
             } finally {
                 deleteTemporaryFiles(
                     audioFile = audioFile,
-                    imageFile = imageFile
+                    imageFile = null
                 )
 
                 stopInProgress.set(false)
@@ -484,6 +463,38 @@ fun FrankConversationHost(
                          * the frame. WebSocket ordering already ensures that
                          * the image message precedes the audio message.
                          */
+                    }
+
+                    override fun onFrameRequested(
+                        trace: com.idumet.frank.network.DeviceTrace,
+                        maxAgeMs: Long
+                    ) {
+                        coroutineScope.launch {
+                            val frame = if (cameraEnabled) {
+                                withContext(Dispatchers.IO) {
+                                    camera.copyFreshFrame(maxAgeMs)
+                                }
+                            } else null
+
+                            if (frame == null) {
+                                recordingStatus = "Point the camera at what you want me to check and try again."
+                                updateAssistantState(AssistantState.Error)
+                                return@launch
+                            }
+
+                            try {
+                                withContext(Dispatchers.IO) {
+                                    webSocketClient.sendFrame(frame, trace)
+                                }
+                                recordingStatus = "Checking the current camera view..."
+                            } catch (exception: Exception) {
+                                frame.file.delete()
+                                recordingStatus = exception.message ?: "Unable to send camera evidence"
+                                updateAssistantState(AssistantState.Error)
+                                return@launch
+                            }
+                            frame.file.delete()
+                        }
                     }
 
                     override fun onError(
