@@ -2,6 +2,8 @@ package com.idumet.frank.network
 
 import com.idumet.frank.BuildConfig
 import com.idumet.frank.camera.CameraFrame
+import com.idumet.frank.context.ContextSnapshotV1
+import com.idumet.frank.context.ContextSnapshotValidatorV1
 
 import android.os.Handler
 import android.os.Looper
@@ -54,6 +56,11 @@ class FrankWebSocketClient(
         val capturedAt: String,
         val ageMs: Long,
         val quality: String
+    )
+
+    private data class ContextSnapshotMessage(
+        val type: String = "context_snapshot",
+        val snapshot: ContextSnapshotV1
     )
 
     private val gson = Gson()
@@ -311,6 +318,18 @@ class FrankWebSocketClient(
         )
     }
 
+    fun currentSessionId(): String = sessionId
+
+    fun sendContextSnapshot(snapshot: ContextSnapshotV1) {
+        check(isReady) { "Frank device stream is not ready" }
+        check(snapshot.sessionId == sessionId) { "Context snapshot belongs to another session" }
+        ContextSnapshotValidatorV1.validate(snapshot)
+        check(webSocket?.send(gson.toJson(ContextSnapshotMessage(snapshot = snapshot))) == true) {
+            "Failed to send context snapshot to Frank"
+        }
+        Log.d(LOG_TAG, "context_sent snapshotId=${snapshot.snapshotId}")
+    }
+
     /**
      * Sends an image followed by an audio recording.
      *
@@ -408,6 +427,10 @@ class FrankWebSocketClient(
                     val trace = gson.fromJson(jsonObject.get("trace"), DeviceTrace::class.java)
                     val maxAgeMs = jsonObject.get("maxAgeMs")?.asLong ?: DEFAULT_FRAME_MAX_AGE_MS
                     listener.onFrameRequested(trace, maxAgeMs)
+                }
+
+                "context_ack" -> {
+                    Log.d(LOG_TAG, "context_accepted snapshotId=${jsonObject.get("snapshotId")?.asString}")
                 }
 
                 "transcript" -> {

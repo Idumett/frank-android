@@ -2,6 +2,7 @@ package com.idumet.frank
 
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -15,6 +16,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.idumet.frank.camera.FrankCamera
+import com.idumet.frank.context.FrankContextEngine
 import com.idumet.frank.network.FrankClient
 import com.idumet.frank.network.FrankWebSocketClient
 import com.idumet.frank.service.AdaptiveSilenceDetector
@@ -57,6 +59,7 @@ fun FrankConversationHost(
     val haptics = remember {
         FrankHaptics(context.applicationContext)
     }
+    val contextEngine = remember { FrankContextEngine(context.applicationContext) }
 
     var lastHapticState by remember {
         mutableStateOf<AssistantState?>(null)
@@ -65,6 +68,7 @@ fun FrankConversationHost(
     fun updateAssistantState(
         state: AssistantState
     ) {
+        contextEngine.updateAppState(state.name.lowercase())
         if (lastHapticState != state) {
             lastHapticState = state
             haptics.performStateCue(state)
@@ -136,6 +140,7 @@ fun FrankConversationHost(
             jpegQuality = 80,
             onFrameCaptured = {
                 hasCameraFrame = true
+                contextEngine.updateEvidence(it)
             },
             onError = { message ->
                 /*
@@ -217,6 +222,10 @@ fun FrankConversationHost(
                 recordingStatus = "Sending audio..."
 
                 withContext(Dispatchers.IO) {
+                    runCatching {
+                        val snapshot = contextEngine.snapshot(webSocketClient.currentSessionId())
+                        webSocketClient.sendContextSnapshot(snapshot)
+                    }.onFailure { Log.w("FrankDiagnostics", "context_snapshot_failed", it) }
                     webSocketClient.sendRequest(
                         audioFile = audioFile
                     )
@@ -651,6 +660,7 @@ fun FrankConversationHost(
     DisposableEffect(Unit) {
         onDispose {
             sessionOpen.set(false)
+            contextEngine.updateSessionOpen(false)
             mainHandler.removeCallbacksAndMessages(null)
             if (requestInFlight) {
                 webSocketClient.stop()

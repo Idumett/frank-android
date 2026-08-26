@@ -47,6 +47,23 @@ fun FrankPermissionSection(
             }
         }
 
+    val locationLauncher =
+        rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { permissions ->
+            val precise = permissions["android.permission.ACCESS_FINE_LOCATION"] == true
+            val approximate = permissions["android.permission.ACCESS_COARSE_LOCATION"] == true
+            Toast.makeText(
+                context,
+                when {
+                    precise -> "Precise location context enabled"
+                    approximate -> "Approximate location context enabled"
+                    else -> "Location remains off. Frank still works without it."
+                },
+                Toast.LENGTH_LONG
+            ).show()
+        }
+
     Text(
         text = "Frank needs microphone and camera access.",
         modifier = Modifier.padding(top = 16.dp)
@@ -61,5 +78,17 @@ fun FrankPermissionSection(
         }
     ) {
         Text("Enable Frank")
+    }
+
+    Text(
+        text = "Location is optional. It helps Frank answer where you are when asked.",
+        modifier = Modifier.padding(top = 16.dp)
+    )
+
+    Button(
+        modifier = Modifier.padding(top = 8.dp),
+        onClick = { locationLauncher.launch(PermissionManager.locationContextPermissions()) }
+    ) {
+        Text("Enable location context")
     }
 }
