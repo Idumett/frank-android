@@ -6,7 +6,8 @@ const val PRODUCT_DATA_VERSION = "1"
 
 enum class ProductEntityTypeV1(val wireName: String) {
     USER_PROFILE("user_profile"), SESSION("session"), MEMORY("memory"),
-    CONVERSATION_TURN("conversation_turn"), PREFERENCES("preferences")
+    CONVERSATION_TURN("conversation_turn"), PREFERENCES("preferences"),
+    KNOWN_PLACE("known_place"), HAZARD("hazard")
 }
 
 enum class ProductDataErrorCodeV1(val wireName: String) {
@@ -103,6 +104,51 @@ data class TtsPreferencesV1(
     val pitch: Double? = null
 )
 
+data class SavedLocationV1(
+    val latitude: Double,
+    val longitude: Double,
+    val accuracyMeters: Double
+)
+
+data class UserConfirmationV1(
+    val confirmedBy: String = "user",
+    val confirmedAt: String
+)
+
+data class KnownPlaceEntityV1(
+    override val schemaVersion: String = PRODUCT_DATA_VERSION,
+    override val entityType: String = ProductEntityTypeV1.KNOWN_PLACE.wireName,
+    override val id: String,
+    override val ownerId: String,
+    override val createdAt: String,
+    override val updatedAt: String,
+    override val provenance: ProductProvenanceV1,
+    val name: String,
+    val category: String,
+    val location: SavedLocationV1,
+    val confirmation: UserConfirmationV1,
+    val status: String = "active",
+    val notes: String? = null
+) : ProductEntityV1
+
+data class HazardEntityV1(
+    override val schemaVersion: String = PRODUCT_DATA_VERSION,
+    override val entityType: String = ProductEntityTypeV1.HAZARD.wireName,
+    override val id: String,
+    override val ownerId: String,
+    override val createdAt: String,
+    override val updatedAt: String,
+    override val provenance: ProductProvenanceV1,
+    val hazardType: String,
+    val description: String,
+    val location: SavedLocationV1,
+    val radiusMeters: Double,
+    val reportedAt: String,
+    val expiresAt: String,
+    val confirmation: UserConfirmationV1,
+    val status: String = "active"
+) : ProductEntityV1
+
 data class PutProductDataRequestV1(
     val schemaVersion: String = PRODUCT_DATA_VERSION,
     val requestId: String,
@@ -184,6 +230,22 @@ object ProductDataValidatorV1 {
                 require(entity.sessionId.isNotBlank() && entity.text.isNotBlank()) { "Conversation data is required" }
             }
             is PreferencesEntityV1 -> require(entity.sessionId.isNotBlank()) { "sessionId is required" }
+            is KnownPlaceEntityV1 -> {
+                require(entity.name.isNotBlank() && entity.name.length <= 80) { "Place name is invalid" }
+                require(entity.category in setOf("home", "gym", "supermarket", "other")) { "Unknown place category" }
+                require(entity.status in setOf("active", "archived")) { "Unknown place status" }
+                validateLocation(entity.location)
+                validateConfirmation(entity.confirmation)
+            }
+            is HazardEntityV1 -> {
+                require(entity.hazardType in setOf("pothole", "uneven_surface", "obstruction", "roadworks", "other")) { "Unknown hazard type" }
+                require(entity.description.isNotBlank() && entity.radiusMeters in 1.0..100.0) { "Hazard data is invalid" }
+                require(entity.status in setOf("active", "resolved")) { "Unknown hazard status" }
+                validateLocation(entity.location)
+                validateConfirmation(entity.confirmation)
+                requireIso(entity.reportedAt); requireIso(entity.expiresAt)
+                require(Instant.parse(entity.expiresAt).isAfter(Instant.parse(entity.reportedAt))) { "Hazard expiry is invalid" }
+            }
         }
     }
 
@@ -196,4 +258,12 @@ object ProductDataValidatorV1 {
     }
 
     private fun requireIso(value: String) { require(runCatching { Instant.parse(value) }.isSuccess) { "Invalid timestamp" } }
+    private fun validateLocation(location: SavedLocationV1) {
+        require(location.latitude in -90.0..90.0 && location.longitude in -180.0..180.0) { "Location is invalid" }
+        require(location.accuracyMeters in 0.0..1_000.0) { "Location accuracy is invalid" }
+    }
+    private fun validateConfirmation(confirmation: UserConfirmationV1) {
+        require(confirmation.confirmedBy == "user") { "User confirmation is required" }
+        requireIso(confirmation.confirmedAt)
+    }
 }
