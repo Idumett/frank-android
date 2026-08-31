@@ -23,6 +23,27 @@ class ContextSnapshotV1Test {
         }
     }
 
+    @Test fun rejectsFutureAndMalformedSignalChronology() {
+        val now = 1_788_000_000_000L
+        val future = snapshot(now).copy(
+            location = snapshot(now).location.copy(
+                observedAt = Instant.ofEpochMilli(now + 20_000).toString()
+            )
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            ContextSnapshotValidatorV1.validate(future, now)
+        }
+        val conflict = snapshot(now).copy(
+            movement = ContextSignalV1(
+                status = "conflicting", reason = "sensor_disagreement", sources = listOf("gps"),
+                provenance = ContextProvenanceV1("android_sensor", Instant.ofEpochMilli(now).toString())
+            )
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            ContextSnapshotValidatorV1.validate(conflict, now)
+        }
+    }
+
     private fun snapshot(now: Long): ContextSnapshotV1 {
         val observed = Instant.ofEpochMilli(now); val expires = observed.plusSeconds(30)
         val source = ContextProvenanceV1("android_system", observed.toString())

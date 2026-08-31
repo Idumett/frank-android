@@ -29,7 +29,13 @@ class FrankContextEngine(context: Context) {
     @Volatile private var lastMovement: ContextSignalV1<MovementContextV1>? = null
 
     fun updateAppState(value: String) { appState = value }
-    fun updateSessionOpen(value: Boolean) { sessionOpen = value }
+    fun updateSessionOpen(value: Boolean) {
+        sessionOpen = value
+        if (!value) {
+            evidence = null
+            lastMovement = null
+        }
+    }
     fun updateEvidence(frame: CameraFrame) { evidence = frame }
 
     suspend fun snapshot(sessionId: String): ContextSnapshotV1 {
@@ -81,10 +87,21 @@ class FrankContextEngine(context: Context) {
                 if (value == null) continuation.resume(unknown("unavailable", provenance("android_sensor", now)))
                 else {
                     val observed = Instant.ofEpochMilli(value.time)
+                    if (observed.isAfter(now.plusSeconds(10))) {
+                        continuation.resume(conflicting("invalid_sequence", listOf("gps_time", "system_time"), provenance("android_sensor", now)))
+                        return@addOnCompleteListener
+                    }
+                    if (!value.accuracy.isFinite() || value.accuracy <= 0f || value.accuracy > 10_000f) {
+                        continuation.resume(conflicting("accuracy_mismatch", listOf("gps", "location_accuracy"), provenance("android_sensor", now)))
+                        return@addOnCompleteListener
+                    }
                     lastMovement = if (value.hasSpeed()) {
                         val speed = value.speed.toDouble()
-                        val state = when { speed >= 6.0 -> "vehicle"; speed >= 0.5 -> "walking"; else -> "stationary" }
-                        known(MovementContextV1(state, if (value.accuracy <= 25f) 0.8 else 0.5, speed, value.bearing.toDouble().takeIf { value.hasBearing() }), observed, minOf(expires, observed.plusSeconds(15)), provenance("android_sensor", now))
+                        if (speed !in 0.0..150.0) conflicting("accuracy_mismatch", listOf("gps", "speed"), provenance("android_sensor", now))
+                        else {
+                            val state = when { speed >= 6.0 -> "vehicle"; speed >= 0.5 -> "walking"; else -> "stationary" }
+                            known(MovementContextV1(state, if (value.accuracy <= 25f) 0.8 else 0.5, speed, value.bearing.toDouble().takeIf { value.hasBearing() }), observed, minOf(expires, observed.plusSeconds(15)), provenance("android_sensor", now))
+                        }
                     } else unknown("unavailable", provenance("android_sensor", now))
                     if (observed.plusSeconds(30).isBefore(now)) continuation.resume(stale(observed, observed.plusSeconds(30), provenance("android_sensor", now)))
                     else continuation.resume(known(LocationContextV1(value.latitude, value.longitude, value.accuracy.toDouble(), value.altitude.takeIf { value.hasAltitude() }), observed, minOf(expires, observed.plusSeconds(30)), provenance("android_sensor", now)))
@@ -107,4 +124,5 @@ class FrankContextEngine(context: Context) {
     private fun <T> unknown(reason: String, provenance: ContextProvenanceV1) = ContextSignalV1<T>(status = "unknown", reason = reason, provenance = provenance)
     private fun <T> denied(permission: String, provenance: ContextProvenanceV1) = ContextSignalV1<T>(status = "denied", permission = permission, provenance = provenance)
     private fun <T> stale(observed: Instant, expired: Instant, provenance: ContextProvenanceV1) = ContextSignalV1<T>(status = "stale", lastObservedAt = observed.toString(), expiredAt = expired.toString(), provenance = provenance)
+    private fun <T> conflicting(reason: String, sources: List<String>, provenance: ContextProvenanceV1) = ContextSignalV1<T>(status = "conflicting", reason = reason, sources = sources, provenance = provenance)
 }

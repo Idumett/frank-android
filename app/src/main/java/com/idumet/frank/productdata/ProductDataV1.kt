@@ -232,6 +232,7 @@ object ProductDataValidatorV1 {
             is PreferencesEntityV1 -> require(entity.sessionId.isNotBlank()) { "sessionId is required" }
             is KnownPlaceEntityV1 -> {
                 require(entity.name.isNotBlank() && entity.name.length <= 80) { "Place name is invalid" }
+                require(entity.name.none { it.isISOControl() || it == '\n' || it == '\r' }) { "Place name contains unsafe characters" }
                 require(entity.category in setOf("home", "gym", "supermarket", "other")) { "Unknown place category" }
                 require(entity.status in setOf("active", "archived")) { "Unknown place status" }
                 validateLocation(entity.location)
@@ -245,6 +246,7 @@ object ProductDataValidatorV1 {
                 validateConfirmation(entity.confirmation)
                 requireIso(entity.reportedAt); requireIso(entity.expiresAt)
                 require(Instant.parse(entity.expiresAt).isAfter(Instant.parse(entity.reportedAt))) { "Hazard expiry is invalid" }
+                require(java.time.Duration.between(Instant.parse(entity.reportedAt), Instant.parse(entity.expiresAt)).toDays() <= 90) { "Hazard retention is too long" }
             }
         }
     }

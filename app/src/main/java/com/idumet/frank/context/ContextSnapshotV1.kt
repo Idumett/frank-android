@@ -50,18 +50,31 @@ object ContextSnapshotValidatorV1 {
             snapshot.device.connectivity, snapshot.device.screen, snapshot.device.headphones,
             snapshot.device.batteryPercent, snapshot.device.cameraAvailable, snapshot.app,
             snapshot.location, snapshot.movement, snapshot.evidence
-        ).forEach(::validateSignal)
+        ).forEach { validateSignal(it, nowMillis) }
     }
 
-    private fun validateSignal(signal: ContextSignalV1<*>) {
+    private fun validateSignal(signal: ContextSignalV1<*>, nowMillis: Long) {
         require(signal.status in setOf("known", "unknown", "denied", "stale", "conflicting")) { "Unknown context status" }
-        java.time.Instant.parse(signal.provenance.collectedAt)
+        require(signal.provenance.source in setOf("android_system", "android_sensor", "android_app")) { "Unknown context provenance" }
+        val collected = java.time.Instant.parse(signal.provenance.collectedAt).toEpochMilli()
+        require(collected <= nowMillis + 10_000) { "Context provenance is in the future" }
         when (signal.status) {
-            "known" -> require(signal.value != null && signal.observedAt != null && signal.expiresAt != null) { "Known context is incomplete" }
-            "unknown" -> require(signal.reason != null) { "Unknown context needs a reason" }
-            "denied" -> require(signal.permission != null) { "Denied context needs a permission" }
-            "stale" -> require(signal.lastObservedAt != null && signal.expiredAt != null) { "Stale context is incomplete" }
-            "conflicting" -> require((signal.sources?.size ?: 0) >= 2 && signal.reason != null) { "Conflicting context is incomplete" }
+            "known" -> {
+                require(signal.value != null && signal.observedAt != null && signal.expiresAt != null) { "Known context is incomplete" }
+                val observed = java.time.Instant.parse(signal.observedAt).toEpochMilli()
+                val expires = java.time.Instant.parse(signal.expiresAt).toEpochMilli()
+                require(observed <= nowMillis + 10_000 && expires > observed) { "Known context timing is invalid" }
+            }
+            "unknown" -> require(signal.reason in setOf("unavailable", "not_collected", "not_supported")) { "Unknown context needs a valid reason" }
+            "denied" -> require(signal.permission in setOf("microphone", "camera", "location", "activity")) { "Denied context needs a valid permission" }
+            "stale" -> {
+                require(signal.lastObservedAt != null && signal.expiredAt != null) { "Stale context is incomplete" }
+                require(!java.time.Instant.parse(signal.expiredAt).isBefore(java.time.Instant.parse(signal.lastObservedAt))) { "Stale context timing is invalid" }
+            }
+            "conflicting" -> {
+                require((signal.sources?.size ?: 0) in 2..4) { "Conflicting context needs two to four sources" }
+                require(signal.reason in setOf("sensor_disagreement", "invalid_sequence", "accuracy_mismatch")) { "Conflicting context needs a valid reason" }
+            }
         }
     }
 }
