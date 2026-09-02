@@ -238,9 +238,7 @@ fun FrankConversationHost(
                 clearSilenceDetection()
                 updateAssistantState(AssistantState.Error)
 
-                recordingStatus =
-                    exception.message
-                        ?: "Failed to send request"
+                recordingStatus = frankUserMessage(exception.message)
             } finally {
                 deleteTemporaryFiles(
                     audioFile = audioFile,
@@ -363,9 +361,7 @@ fun FrankConversationHost(
             clearSilenceDetection()
             updateAssistantState(AssistantState.Error)
 
-            recordingStatus =
-                exception.message
-                    ?: "Recording failed"
+            recordingStatus = frankUserMessage(exception.message)
         }
     }
 
@@ -498,7 +494,7 @@ fun FrankConversationHost(
                                 recordingStatus = "Checking the current camera view..."
                             } catch (exception: Exception) {
                                 frame.file.delete()
-                                recordingStatus = exception.message ?: "Unable to send camera evidence"
+                                recordingStatus = frankUserMessage(exception.message)
                                 updateAssistantState(AssistantState.Error)
                                 return@launch
                             }
@@ -511,10 +507,10 @@ fun FrankConversationHost(
                     ) {
                         mainHandler.post {
                             requestInFlight = false
-                            streamStatus = "Error: $message"
+                            streamStatus = frankUserMessage(message)
 
                             if (!isRecording) {
-                                recordingStatus = "Error: $message"
+                                recordingStatus = frankUserMessage(message)
                             }
 
                             updateAssistantState(AssistantState.Error)
@@ -548,7 +544,7 @@ fun FrankConversationHost(
             mainHandler.post {
                 isRecording = false
                 clearSilenceDetection()
-                recordingStatus = message
+                recordingStatus = frankUserMessage(message)
                 updateAssistantState(AssistantState.Error)
             }
         }

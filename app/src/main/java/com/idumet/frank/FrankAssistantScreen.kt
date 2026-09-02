@@ -30,6 +30,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.invisibleToUser
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -39,10 +46,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun FrankAssistantScreen(
     onClose: () -> Unit
 ) {
+    val context = LocalContext.current
+    val preferences = remember { FrankPreferencesStore(context).read() }
     var assistantState by remember {
         mutableStateOf(AssistantState.Idle)
     }
@@ -55,7 +65,7 @@ fun FrankAssistantScreen(
         label = "FrankBackgroundAnimation"
     )
 
-    val backgroundMovement by backgroundAnimation.animateFloat(
+    val animatedBackgroundMovement by backgroundAnimation.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
@@ -68,7 +78,7 @@ fun FrankAssistantScreen(
         label = "FrankBackgroundMovement"
     )
 
-    val backgroundGlow by backgroundAnimation.animateFloat(
+    val animatedBackgroundGlow by backgroundAnimation.animateFloat(
         initialValue = 0.72f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
@@ -131,6 +141,8 @@ fun FrankAssistantScreen(
         AssistantState.Error ->
             Color(0xFFEF4444)
     }
+    val backgroundMovement = if (preferences.reduceMotion) 0.5f else animatedBackgroundMovement
+    val backgroundGlow = if (preferences.reduceMotion) 0.85f else animatedBackgroundGlow
 
     LaunchedEffect(Unit) {
         contentVisible = true
@@ -139,6 +151,7 @@ fun FrankAssistantScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .semantics { paneTitle = "Frank assistant" }
             .background(
                 Brush.linearGradient(
                     colors = listOf(
@@ -203,7 +216,11 @@ fun FrankAssistantScreen(
                 verticalArrangement = Arrangement.Center
             ) {
                 FrankEye(
-                    state = assistantState
+                    state = assistantState,
+                    reduceMotion = preferences.reduceMotion,
+                    modifier = Modifier.semantics {
+                        invisibleToUser()
+                    }
                 )
 
                 AnimatedContent(
@@ -231,6 +248,9 @@ fun FrankAssistantScreen(
                 ) { text ->
                     Text(
                         text = text,
+                        modifier = Modifier.semantics {
+                            liveRegion = LiveRegionMode.Polite
+                        },
                         color = Color.White.copy(
                             alpha = 0.94f
                         ),
@@ -256,12 +276,8 @@ fun FrankAssistantScreen(
                 ) { text ->
                     Text(
                         text = text,
-                        modifier = Modifier.padding(
-                            top = 10.dp
-                        ),
-                        color = Color.White.copy(
-                            alpha = 0.46f
-                        ),
+                        modifier = Modifier.padding(top = 10.dp),
+                        color = Color.White.copy(alpha = 0.76f),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Normal,
                         letterSpacing = 0.4.sp,

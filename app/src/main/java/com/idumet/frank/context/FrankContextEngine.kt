@@ -9,6 +9,7 @@ import android.media.AudioManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.BatteryManager
+import android.os.Build
 import android.os.PowerManager
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.LocationServices
@@ -67,7 +68,11 @@ class FrankContextEngine(context: Context) {
             permissions = PermissionContextV1(
                 permission(Manifest.permission.RECORD_AUDIO, "microphone", now, expires),
                 permission(Manifest.permission.CAMERA, "camera", now, expires), locationPermission,
-                permission(Manifest.permission.ACTIVITY_RECOGNITION, "activity", now, expires)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    permission(Manifest.permission.ACTIVITY_RECOGNITION, "activity", now, expires)
+                } else {
+                    unknown("not_supported", provenance("android_system", now))
+                }
             ),
             device = DeviceContextV1(
                 known(connectivity(), now, expires, system), known(screen(), now, expires, system),
