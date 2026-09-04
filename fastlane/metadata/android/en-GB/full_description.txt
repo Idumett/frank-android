@@ -1,0 +1,5 @@
+Frank is a voice-first AI accessibility assistant designed for blind and low-vision people.
+
+Ask Frank to read text, describe a scene, remember useful places or hazards, and provide simple recovery help when you feel lost. Camera and location access are optional, and Frank requests current visual evidence only when it is relevant.
+
+Frank is not a navigation or road-crossing service. Always use your mobility aids and trusted sources for traffic, crossings and immediate hazards.

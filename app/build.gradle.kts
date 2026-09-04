@@ -13,6 +13,12 @@ val frankAccessToken = providers.gradleProperty("frankAccessToken")
     .orElse(providers.provider { localProperties.getProperty("frank.access.token") })
     .orElse("")
     .get()
+val releaseStoreFile = providers.environmentVariable("FRANK_UPLOAD_KEYSTORE")
+val releaseStorePassword = providers.environmentVariable("FRANK_UPLOAD_STORE_PASSWORD")
+val releaseKeyAlias = providers.environmentVariable("FRANK_UPLOAD_KEY_ALIAS")
+val releaseKeyPassword = providers.environmentVariable("FRANK_UPLOAD_KEY_PASSWORD")
+val releaseVersionCode = providers.gradleProperty("frankVersionCode").orElse("1").get().toInt()
+val releaseVersionName = providers.gradleProperty("frankVersionName").orElse("1.0.0").get()
 
 fun quotedBuildValue(value: String): String =
     "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
@@ -34,17 +40,28 @@ android {
         applicationId = "com.idumet.frank"
         minSdk = 28
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = releaseVersionCode
+        versionName = releaseVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "FRANK_SERVER_URL", quotedBuildValue(frankServerUrl))
         buildConfigField("String", "FRANK_ACCESS_TOKEN", quotedBuildValue(frankAccessToken))
     }
 
+    signingConfigs {
+        if (releaseStoreFile.isPresent) {
+            create("upload") {
+                storeFile = file(releaseStoreFile.get())
+                storePassword = releaseStorePassword.orNull
+                keyAlias = releaseKeyAlias.orNull
+                keyPassword = releaseKeyPassword.orNull
+            }
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("upload")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
