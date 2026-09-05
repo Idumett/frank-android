@@ -1,0 +1,17 @@
+default_platform(:android)
+
+platform :android do
+  desc "Publish the signed bundle and listing to private internal testing"
+  lane :internal do |options|
+    upload_to_play_store(
+      json_key: options[:json_key],
+      package_name: "com.idumet.frank",
+      aab: "app/build/outputs/bundle/release/app-release.aab",
+      track: "internal",
+      release_status: "completed",
+      metadata_path: "fastlane/metadata/android",
+      skip_upload_images: true,
+      skip_upload_screenshots: true
+    )
+  end
+end

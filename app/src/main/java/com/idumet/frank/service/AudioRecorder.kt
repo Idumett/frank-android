@@ -44,6 +44,9 @@ class AudioRecorder(
     private var audioSampleListener:
             ((ShortArray, Int) -> Unit)? = null
 
+    private var errorListener:
+            ((String) -> Unit)? = null
+
     val isRecording: Boolean
         get() = recording.get()
 
@@ -51,6 +54,12 @@ class AudioRecorder(
         listener: ((ShortArray, Int) -> Unit)?
     ) {
         audioSampleListener = listener
+    }
+
+    fun setErrorListener(
+        listener: ((String) -> Unit)?
+    ) {
+        errorListener = listener
     }
 
     @SuppressLint("MissingPermission")
@@ -208,8 +217,11 @@ class AudioRecorder(
                     )
                 }
             }
-        } catch (_: Exception) {
+        } catch (exception: Exception) {
             recording.set(false)
+            errorListener?.invoke(
+                exception.message ?: "Audio recording failed"
+            )
         }
     }
 

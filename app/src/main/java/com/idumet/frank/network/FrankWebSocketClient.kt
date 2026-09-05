@@ -1,6 +1,15 @@
 package com.idumet.frank.network
 
+import com.idumet.frank.BuildConfig
+import com.idumet.frank.camera.CameraFrame
+import com.idumet.frank.context.ContextSnapshotV1
+import com.idumet.frank.context.ContextSnapshotValidatorV1
+
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.util.Base64
+import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonParser
 import okhttp3.OkHttpClient
@@ -9,7 +18,9 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import java.io.File
+import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -26,6 +37,10 @@ class FrankWebSocketClient(
         fun onError(message: String)
         fun onDisconnected()
 
+        fun onFrameRequested(trace: DeviceTrace, maxAgeMs: Long) {
+            // Optional callback for clients without a camera.
+        }
+
         fun onFrameAcknowledged(seq: Int) {
             // Optional callback.
         }
@@ -33,9 +48,19 @@ class FrankWebSocketClient(
 
     private data class DeviceFrameMessage(
         val type: String = "frame",
+        val trace: DeviceTrace,
+        val frameId: String,
         val seq: Int,
         val mime: String,
-        val bytesBase64: String
+        val bytesBase64: String,
+        val capturedAt: String,
+        val ageMs: Long,
+        val quality: String
+    )
+
+    private data class ContextSnapshotMessage(
+        val type: String = "context_snapshot",
+        val snapshot: ContextSnapshotV1
     )
 
     private val gson = Gson()
@@ -55,6 +80,13 @@ class FrankWebSocketClient(
     private val frameSequence =
         AtomicInteger(0)
 
+    private val requestStartedAt =
+        ConcurrentHashMap<String, Long>()
+
+    private val mainHandler =
+        Handler(Looper.getMainLooper())
+
+    @Volatile
     private var webSocket: WebSocket? = null
 
     private var sessionId: String =
@@ -63,8 +95,24 @@ class FrankWebSocketClient(
     @Volatile
     private var isReady = false
 
+    @Volatile
+    private var keepConnected = false
+
+    private var reconnectAttempt = 0
+
+    private val reconnect = Runnable {
+        openSocket()
+    }
+
     fun connect() {
-        if (webSocket != null) {
+        keepConnected = true
+        mainHandler.removeCallbacks(reconnect)
+        openSocket()
+    }
+
+    @Synchronized
+    private fun openSocket() {
+        if (!keepConnected || webSocket != null) {
             return
         }
 
@@ -72,114 +120,122 @@ class FrankWebSocketClient(
 
         val request =
             Request.Builder()
-                .url(DEVICE_STREAM_URL)
-                .build()
-
-        webSocket =
-            client.newWebSocket(
-                request,
-                object : WebSocketListener() {
-
-                    override fun onOpen(
-                        webSocket: WebSocket,
-                        response: Response
-                    ) {
-                        sendHello(webSocket)
-                    }
-
-                    override fun onMessage(
-                        webSocket: WebSocket,
-                        text: String
-                    ) {
-                        handleMessage(text)
-                    }
-
-                    override fun onClosing(
-                        webSocket: WebSocket,
-                        code: Int,
-                        reason: String
-                    ) {
-                        webSocket.close(
-                            code,
-                            reason
-                        )
-                    }
-
-                    override fun onClosed(
-                        webSocket: WebSocket,
-                        code: Int,
-                        reason: String
-                    ) {
-                        isReady = false
-
-                        this@FrankWebSocketClient
-                            .webSocket = null
-
-                        listener.onDisconnected()
-                    }
-
-                    override fun onFailure(
-                        webSocket: WebSocket,
-                        throwable: Throwable,
-                        response: Response?
-                    ) {
-                        isReady = false
-
-                        this@FrankWebSocketClient
-                            .webSocket = null
-
-                        val message =
-                            buildString {
-                                append(
-                                    throwable.message
-                                        ?: "WebSocket connection failed"
-                                )
-
-                                if (response != null) {
-                                    append(
-                                        " (HTTP ${response.code})"
-                                    )
-                                }
-                            }
-
-                        listener.onError(message)
+                .url(deviceStreamUrl())
+                .apply {
+                    if (BuildConfig.FRANK_ACCESS_TOKEN.isNotBlank()) {
+                        header("Authorization", "Bearer ${BuildConfig.FRANK_ACCESS_TOKEN}")
                     }
                 }
-            )
+                .build()
+
+        val socketListener =
+            object : WebSocketListener() {
+                override fun onOpen(
+                    webSocket: WebSocket,
+                    response: Response
+                ) {
+                    if (
+                        this@FrankWebSocketClient.webSocket === webSocket &&
+                        keepConnected
+                    ) {
+                        sendHello(webSocket)
+                    } else {
+                        webSocket.close(1000, "Connection no longer needed")
+                    }
+                }
+
+                override fun onMessage(
+                    webSocket: WebSocket,
+                    text: String
+                ) {
+                    if (this@FrankWebSocketClient.webSocket === webSocket) {
+                        handleMessage(text)
+                    }
+                }
+
+                override fun onClosing(
+                    webSocket: WebSocket,
+                    code: Int,
+                    reason: String
+                ) {
+                    webSocket.close(code, reason)
+                }
+
+                override fun onClosed(
+                    webSocket: WebSocket,
+                    code: Int,
+                    reason: String
+                ) {
+                    connectionEnded(webSocket)
+                }
+
+                override fun onFailure(
+                    webSocket: WebSocket,
+                    throwable: Throwable,
+                    response: Response?
+                ) {
+                    response?.close()
+                    val message =
+                        buildString {
+                            append(throwable.message ?: "WebSocket connection failed")
+                            if (response != null) append(" (HTTP ${response.code})")
+                        }
+                    Log.w(LOG_TAG, "stream_failed message=$message")
+                    listener.onError(message)
+                    connectionEnded(webSocket)
+                }
+            }
+
+        webSocket = client.newWebSocket(request, socketListener)
     }
 
-    /**
-     * Sends the latest camera image to Frank.
-     *
-     * The server stores this as the current frame and uses it when the
-     * following utterance or audio message is processed.
-     *
-     * WebSocket messages are delivered in order, so calling sendFrame()
-     * immediately before sendAudio() guarantees the frame arrives first.
-     *
-     * @return the frame sequence number.
-     */
+    @Synchronized
+    private fun connectionEnded(
+        endedSocket: WebSocket
+    ) {
+        if (webSocket !== endedSocket) {
+            return
+        }
+
+        webSocket = null
+        isReady = false
+        requestStartedAt.clear()
+        listener.onDisconnected()
+
+        if (keepConnected) {
+            val delayMs =
+                RetryDelay.milliseconds(
+                    reconnectAttempt++
+                )
+            Log.d(LOG_TAG, "stream_reconnect delayMs=$delayMs")
+            mainHandler.removeCallbacks(reconnect)
+            mainHandler.postDelayed(reconnect, delayMs)
+        }
+    }
+
+    /** Sends one frame after the server requests evidence for this turn. */
     fun sendFrame(
-        file: File
+        frame: CameraFrame,
+        trace: DeviceTrace
     ): Int {
         check(isReady) {
             "Frank device stream is not ready"
         }
 
         check(
-            file.exists() &&
-                    file.isFile &&
-                    file.length() > 0L
+            frame.file.exists() &&
+                    frame.file.isFile &&
+                    frame.file.length() in 1..MAX_IMAGE_BYTES
         ) {
             "Camera frame is empty"
         }
 
         val mimeType =
-            determineImageMimeType(file)
+            determineImageMimeType(frame.file)
 
         val frameBase64 =
             Base64.encodeToString(
-                file.readBytes(),
+                frame.file.readBytes(),
                 Base64.NO_WRAP
             )
 
@@ -188,9 +244,14 @@ class FrankWebSocketClient(
 
         val message =
             DeviceFrameMessage(
+                trace = trace,
+                frameId = frame.frameId,
                 seq = sequence,
                 mime = mimeType,
-                bytesBase64 = frameBase64
+                bytesBase64 = frameBase64,
+                capturedAt = Instant.ofEpochMilli(frame.capturedAtMs).toString(),
+                ageMs = (System.currentTimeMillis() - frame.capturedAtMs).coerceAtLeast(0L),
+                quality = frame.quality
             )
 
         val sent =
@@ -204,11 +265,17 @@ class FrankWebSocketClient(
             )
         }
 
+        Log.d(
+            LOG_TAG,
+            "frame_sent requestId=${trace.requestId} frameId=${frame.frameId} seq=$sequence bytes=${frame.file.length()}"
+        )
+
         return sequence
     }
 
     fun sendAudio(
-        file: File
+        file: File,
+        trace: DeviceTrace
     ) {
         check(isReady) {
             "Frank device stream is not ready"
@@ -229,7 +296,9 @@ class FrankWebSocketClient(
 
         val message =
             DeviceAudioMessage(
-                audioBase64 = audioBase64
+                trace = trace,
+                audioBase64 = audioBase64,
+                sentAt = Instant.now().toString()
             )
 
         val sent =
@@ -242,6 +311,23 @@ class FrankWebSocketClient(
                 "Failed to send audio to Frank"
             )
         }
+
+        Log.d(
+            LOG_TAG,
+            "audio_sent requestId=${trace.requestId} bytes=${file.length()}"
+        )
+    }
+
+    fun currentSessionId(): String = sessionId
+
+    fun sendContextSnapshot(snapshot: ContextSnapshotV1) {
+        check(isReady) { "Frank device stream is not ready" }
+        check(snapshot.sessionId == sessionId) { "Context snapshot belongs to another session" }
+        ContextSnapshotValidatorV1.validate(snapshot)
+        check(webSocket?.send(gson.toJson(ContextSnapshotMessage(snapshot = snapshot))) == true) {
+            "Failed to send context snapshot to Frank"
+        }
+        Log.d(LOG_TAG, "context_sent snapshotId=${snapshot.snapshotId}")
     }
 
     /**
@@ -251,20 +337,24 @@ class FrankWebSocketClient(
      * working if camera permission is unavailable or no frame exists.
      */
     fun sendRequest(
-        audioFile: File,
-        imageFile: File?
-    ): Int? {
-        val frameSequence =
-            imageFile
-                ?.takeIf {
-                    it.exists() &&
-                            it.length() > 0L
-                }
-                ?.let(::sendFrame)
+        audioFile: File
+    ): String {
+        val trace =
+            DeviceTrace(
+                requestId = createRequestId(),
+                sessionId = sessionId
+            )
 
-        sendAudio(audioFile)
+        requestStartedAt[trace.requestId] =
+            SystemClock.elapsedRealtime()
 
-        return frameSequence
+        try {
+            sendAudio(audioFile, trace)
+            return trace.requestId
+        } catch (exception: Exception) {
+            requestStartedAt.remove(trace.requestId)
+            throw exception
+        }
     }
 
     private fun sendHello(
@@ -313,7 +403,9 @@ class FrankWebSocketClient(
 
             when (type) {
                 "ready" -> {
+                    reconnectAttempt = 0
                     isReady = true
+                    Log.d(LOG_TAG, "stream_ready sessionId=$sessionId")
                     listener.onReady()
                 }
 
@@ -324,10 +416,21 @@ class FrankWebSocketClient(
                             ?.asInt
 
                     if (sequence != null) {
+                        Log.d(LOG_TAG, "frame_ack seq=$sequence")
                         listener.onFrameAcknowledged(
                             sequence
                         )
                     }
+                }
+
+                "frame_required" -> {
+                    val trace = gson.fromJson(jsonObject.get("trace"), DeviceTrace::class.java)
+                    val maxAgeMs = jsonObject.get("maxAgeMs")?.asLong ?: DEFAULT_FRAME_MAX_AGE_MS
+                    listener.onFrameRequested(trace, maxAgeMs)
+                }
+
+                "context_ack" -> {
+                    Log.d(LOG_TAG, "context_accepted snapshotId=${jsonObject.get("snapshotId")?.asString}")
                 }
 
                 "transcript" -> {
@@ -347,6 +450,8 @@ class FrankWebSocketClient(
                 }
 
                 "meta" -> {
+                    logRoundTrip(jsonObject, "reply_received")
+
                     val reply =
                         jsonObject
                             .getAsJsonObject("reply")
@@ -362,6 +467,8 @@ class FrankWebSocketClient(
                 }
 
                 "audio" -> {
+                    logRoundTrip(jsonObject, "audio_received", complete = true)
+
                     val bytesBase64 =
                         jsonObject
                             .get("bytesBase64")
@@ -387,6 +494,9 @@ class FrankWebSocketClient(
                             ?.asString
                             ?: "Unknown Frank server error"
 
+                    val requestId = requestId(jsonObject)
+                    Log.e(LOG_TAG, "server_error requestId=$requestId message=$message")
+                    if (requestId != null) requestStartedAt.remove(requestId)
                     listener.onError(message)
                 }
 
@@ -408,15 +518,51 @@ class FrankWebSocketClient(
         }
     }
 
-    fun disconnect() {
-        isReady = false
+    private fun logRoundTrip(
+        jsonObject: com.google.gson.JsonObject,
+        event: String,
+        complete: Boolean = false
+    ) {
+        val requestId = requestId(jsonObject) ?: return
+        val startedAt = requestStartedAt[requestId] ?: return
+        val elapsedMs = SystemClock.elapsedRealtime() - startedAt
+        Log.d(LOG_TAG, "$event requestId=$requestId elapsedMs=$elapsedMs")
+        if (complete) requestStartedAt.remove(requestId)
+    }
 
-        webSocket?.close(
+    private fun requestId(
+        jsonObject: com.google.gson.JsonObject
+    ): String? =
+        jsonObject
+            .getAsJsonObject("trace")
+            ?.get("requestId")
+            ?.takeUnless { it.isJsonNull }
+            ?.asString
+
+    fun stop() {
+        val sent = webSocket?.send(
+            gson.toJson(mapOf("type" to "stop"))
+        ) == true
+
+        if (!sent && isReady) {
+            listener.onError("Failed to stop the active Frank request")
+        }
+    }
+
+    @Synchronized
+    fun disconnect() {
+        keepConnected = false
+        isReady = false
+        reconnectAttempt = 0
+        requestStartedAt.clear()
+        mainHandler.removeCallbacks(reconnect)
+
+        val socket = webSocket
+        webSocket = null
+        socket?.close(
             1000,
             "Android client closed"
         )
-
-        webSocket = null
     }
 
     private fun determineImageMimeType(
@@ -452,9 +598,19 @@ class FrankWebSocketClient(
     }
 
     companion object {
+        private const val LOG_TAG = "FrankDiagnostics"
         private const val WAV_HEADER_SIZE = 44L
+        private const val MAX_IMAGE_BYTES = 8L * 1024L * 1024L
+        private const val DEFAULT_FRAME_MAX_AGE_MS = 4_000L
 
-        private const val DEVICE_STREAM_URL =
-            "ws://192.168.0.83:3000/v1/device/stream"
+        private fun deviceStreamUrl(): String {
+            val serverUrl = BuildConfig.FRANK_SERVER_URL.trimEnd('/')
+            val websocketBase = when {
+                serverUrl.startsWith("https://") -> "wss://${serverUrl.removePrefix("https://")}"
+                serverUrl.startsWith("http://") -> "ws://${serverUrl.removePrefix("http://")}"
+                else -> error("Frank server URL must start with http:// or https://")
+            }
+            return "$websocketBase/v1/device/stream"
+        }
     }
 }

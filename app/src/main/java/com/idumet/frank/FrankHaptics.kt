@@ -9,6 +9,7 @@ import android.os.VibratorManager
 class FrankHaptics(
     context: Context
 ) {
+    private val appContext = context.applicationContext
     private val vibrator: Vibrator =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val vibratorManager =
@@ -27,7 +28,10 @@ class FrankHaptics(
     fun performStateCue(
         state: AssistantState
     ) {
-        if (!vibrator.hasVibrator()) {
+        if (
+            !FrankPreferencesStore(appContext).read().hapticsEnabled ||
+            !vibrator.hasVibrator()
+        ) {
             return
         }
 

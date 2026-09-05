@@ -2,6 +2,7 @@ package com.idumet.frank
 
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -11,8 +12,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.idumet.frank.camera.FrankCamera
+import com.idumet.frank.context.FrankContextEngine
 import com.idumet.frank.network.FrankClient
 import com.idumet.frank.network.FrankWebSocketClient
 import com.idumet.frank.service.AdaptiveSilenceDetector
@@ -55,6 +59,7 @@ fun FrankConversationHost(
     val haptics = remember {
         FrankHaptics(context.applicationContext)
     }
+    val contextEngine = remember { FrankContextEngine(context.applicationContext) }
 
     var lastHapticState by remember {
         mutableStateOf<AssistantState?>(null)
@@ -63,6 +68,7 @@ fun FrankConversationHost(
     fun updateAssistantState(
         state: AssistantState
     ) {
+        contextEngine.updateAppState(state.name.lowercase())
         if (lastHapticState != state) {
             lastHapticState = state
             haptics.performStateCue(state)
@@ -119,6 +125,14 @@ fun FrankConversationHost(
         AtomicBoolean(false)
     }
 
+    val sessionOpen = remember {
+        AtomicBoolean(true)
+    }
+
+    var requestInFlight by remember {
+        mutableStateOf(false)
+    }
+
     val camera = remember {
         FrankCamera(
             context = context.applicationContext,
@@ -126,6 +140,7 @@ fun FrankConversationHost(
             jpegQuality = 80,
             onFrameCaptured = {
                 hasCameraFrame = true
+                contextEngine.updateEvidence(it)
             },
             onError = { message ->
                 /*
@@ -183,7 +198,6 @@ fun FrankConversationHost(
 
         coroutineScope.launch {
             var audioFile: File? = null
-            var imageFile: File? = null
 
             try {
                 /*
@@ -205,47 +219,30 @@ fun FrankConversationHost(
                     return@launch
                 }
 
-                /*
-                 * copyLatestFrame() returns a separate temporary file.
-                 * The camera can therefore continue replacing its internal
-                 * latest frame safely.
-                 */
-                imageFile =
-                    if (cameraEnabled) {
-                        withContext(Dispatchers.IO) {
-                            camera.copyLatestFrame()
-                        }
-                    } else {
-                        null
-                    }
-
-                recordingStatus =
-                    if (imageFile != null) {
-                        "Sending audio and image..."
-                    } else {
-                        "Sending audio..."
-                    }
+                recordingStatus = "Sending audio..."
 
                 withContext(Dispatchers.IO) {
+                    runCatching {
+                        val snapshot = contextEngine.snapshot(webSocketClient.currentSessionId())
+                        webSocketClient.sendContextSnapshot(snapshot)
+                    }.onFailure { Log.w("FrankDiagnostics", "context_snapshot_failed", it) }
                     webSocketClient.sendRequest(
-                        audioFile = audioFile,
-                        imageFile = imageFile
+                        audioFile = audioFile
                     )
                 }
 
+                requestInFlight = true
                 recordingStatus = "Thinking..."
             } catch (exception: Exception) {
                 isRecording = false
                 clearSilenceDetection()
                 updateAssistantState(AssistantState.Error)
 
-                recordingStatus =
-                    exception.message
-                        ?: "Failed to send request"
+                recordingStatus = frankUserMessage(exception.message)
             } finally {
                 deleteTemporaryFiles(
                     audioFile = audioFile,
-                    imageFile = imageFile
+                    imageFile = null
                 )
 
                 stopInProgress.set(false)
@@ -364,9 +361,7 @@ fun FrankConversationHost(
             clearSilenceDetection()
             updateAssistantState(AssistantState.Error)
 
-            recordingStatus =
-                exception.message
-                    ?: "Recording failed"
+            recordingStatus = frankUserMessage(exception.message)
         }
     }
 
@@ -427,6 +422,7 @@ fun FrankConversationHost(
                         bytesBase64: String
                     ) {
                         mainHandler.post {
+                            requestInFlight = false
                             recordingStatus = "Preparing Frank's response..."
                             updateAssistantState(AssistantState.Thinking)
 
@@ -442,7 +438,11 @@ fun FrankConversationHost(
 
                                     //restart recording for follow up query
                                     mainHandler.postDelayed({
-                                        if (!isRecording && isStreamReady) {
+                                        if (
+                                            sessionOpen.get() &&
+                                            !isRecording &&
+                                            isStreamReady
+                                        ) {
                                             recordingStatus = "Listening..."
                                             updateAssistantState(AssistantState.Listening)
                                             startRecording(true);
@@ -470,14 +470,47 @@ fun FrankConversationHost(
                          */
                     }
 
+                    override fun onFrameRequested(
+                        trace: com.idumet.frank.network.DeviceTrace,
+                        maxAgeMs: Long
+                    ) {
+                        coroutineScope.launch {
+                            val frame = if (cameraEnabled) {
+                                withContext(Dispatchers.IO) {
+                                    camera.copyFreshFrame(maxAgeMs)
+                                }
+                            } else null
+
+                            if (frame == null) {
+                                recordingStatus = "Point the camera at what you want me to check and try again."
+                                updateAssistantState(AssistantState.Error)
+                                return@launch
+                            }
+
+                            try {
+                                withContext(Dispatchers.IO) {
+                                    webSocketClient.sendFrame(frame, trace)
+                                }
+                                recordingStatus = "Checking the current camera view..."
+                            } catch (exception: Exception) {
+                                frame.file.delete()
+                                recordingStatus = frankUserMessage(exception.message)
+                                updateAssistantState(AssistantState.Error)
+                                return@launch
+                            }
+                            frame.file.delete()
+                        }
+                    }
+
                     override fun onError(
                         message: String
                     ) {
                         mainHandler.post {
-                            streamStatus = "Error: $message"
+                            requestInFlight = false
+                            streamStatus = frankUserMessage(message)
 
                             if (!isRecording) {
-                                recordingStatus = "Error: $message"
+                                recordingStatus = frankUserMessage(message)
                             }
 
                             updateAssistantState(AssistantState.Error)
@@ -487,12 +520,38 @@ fun FrankConversationHost(
                     override fun onDisconnected() {
                         mainHandler.post {
                             isStreamReady = false
-                            streamStatus = "Device stream disconnected"
+                            requestInFlight = false
+                            hasAutoStarted = false
+                            clearSilenceDetection()
+
+                            if (audioRecorder.isRecording) {
+                                audioRecorder.cancel()
+                            }
+
+                            isRecording = false
+                            audioPlayer.stop()
+                            streamStatus = "Connection lost. Reconnecting..."
+                            recordingStatus = "Waiting for Frank..."
                             updateAssistantState(AssistantState.Idle)
                         }
                     }
                 }
         )
+    }
+
+    DisposableEffect(audioRecorder) {
+        audioRecorder.setErrorListener { message ->
+            mainHandler.post {
+                isRecording = false
+                clearSilenceDetection()
+                recordingStatus = frankUserMessage(message)
+                updateAssistantState(AssistantState.Error)
+            }
+        }
+
+        onDispose {
+            audioRecorder.setErrorListener(null)
+        }
     }
 
     /*
@@ -514,9 +573,59 @@ fun FrankConversationHost(
         }
     }
 
-    LaunchedEffect(autoConnect) {
-        if (autoConnect) {
+    DisposableEffect(
+        lifecycleOwner,
+        autoConnect
+    ) {
+        val observer =
+            LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_START -> {
+                        sessionOpen.set(true)
+                        if (autoConnect) {
+                            webSocketClient.connect()
+                        }
+                    }
+
+                    Lifecycle.Event.ON_STOP -> {
+                        sessionOpen.set(false)
+                        mainHandler.removeCallbacksAndMessages(null)
+                        if (requestInFlight) {
+                            webSocketClient.stop()
+                            requestInFlight = false
+                        }
+                        hasAutoStarted = false
+                        isStreamReady = false
+                        clearSilenceDetection()
+
+                        if (audioRecorder.isRecording) {
+                            audioRecorder.cancel()
+                        }
+
+                        isRecording = false
+                        audioPlayer.stop()
+                        webSocketClient.disconnect()
+                        streamStatus = "Device stream paused"
+                        recordingStatus = "Ready"
+                        updateAssistantState(AssistantState.Idle)
+                    }
+
+                    else -> Unit
+                }
+            }
+
+        lifecycleOwner.lifecycle.addObserver(observer)
+
+        if (
+            autoConnect &&
+            lifecycleOwner.lifecycle.currentState
+                .isAtLeast(Lifecycle.State.STARTED)
+        ) {
             webSocketClient.connect()
+        }
+
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
 
@@ -546,6 +655,13 @@ fun FrankConversationHost(
 
     DisposableEffect(Unit) {
         onDispose {
+            sessionOpen.set(false)
+            contextEngine.updateSessionOpen(false)
+            mainHandler.removeCallbacksAndMessages(null)
+            if (requestInFlight) {
+                webSocketClient.stop()
+                requestInFlight = false
+            }
             hasAutoStarted = false
 
             clearSilenceDetection()

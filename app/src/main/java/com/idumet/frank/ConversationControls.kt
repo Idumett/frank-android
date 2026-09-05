@@ -1,6 +1,7 @@
 package com.idumet.frank
 
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -91,16 +92,12 @@ fun ConversationControls(
 
     if (showCloseButton) {
         TextButton(
-            modifier = Modifier.padding(
-                top = 30.dp
-            ),
+            modifier = Modifier.padding(top = 30.dp).sizeIn(minWidth = 48.dp, minHeight = 48.dp),
             onClick = onClose
         ) {
             Text(
                 text = "Close",
-                color = Color.White.copy(
-                    alpha = 0.34f
-                )
+                color = Color.White.copy(alpha = 0.78f)
             )
         }
     }

@@ -43,6 +43,7 @@ private data class FrankParticle(
 @Composable
 fun FrankEye(
     state: AssistantState,
+    reduceMotion: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val animation = rememberInfiniteTransition(
@@ -309,11 +310,18 @@ fun FrankEye(
             )
 
             val minimumDimension = size.minDimension
+            val effectiveStateScale = if (reduceMotion) 1f else stateScale
+            val effectivePulse = if (reduceMotion) 1f else breathingPulse
+            val effectiveMainRotation = if (reduceMotion) 0f else mainRotation
+            val effectiveReverseRotation = if (reduceMotion) 0f else reverseRotation
+            val effectiveParticleRotation = if (reduceMotion) 0f else particleRotation
+            val effectiveScannerRotation = if (reduceMotion) 0f else scannerRotation
+            val effectiveCoreScale = if (reduceMotion) 1f else coreScale
             val baseRadius =
-                minimumDimension * 0.31f * stateScale
+                minimumDimension * 0.31f * effectiveStateScale
 
             val outerGlowRadius =
-                baseRadius * 1.55f * breathingPulse
+                baseRadius * 1.55f * effectivePulse
 
             drawCircle(
                 brush = Brush.radialGradient(
@@ -353,7 +361,7 @@ fun FrankEye(
                 val angle =
                     (
                             particle.angle +
-                                    particleRotation *
+                                    effectiveParticleRotation *
                                     particle.speedFactor *
                                     stateSpeed
                             ) * PI.toFloat() / 180f
@@ -374,7 +382,7 @@ fun FrankEye(
                     0.65f +
                             0.35f *
                             sin(
-                                particleRotation *
+                                effectiveParticleRotation *
                                         0.04f +
                                         index
                             )
@@ -398,7 +406,7 @@ fun FrankEye(
             }
 
             rotate(
-                degrees = mainRotation,
+                degrees = effectiveMainRotation,
                 pivot = centre
             ) {
                 drawArc(
@@ -438,7 +446,7 @@ fun FrankEye(
             }
 
             rotate(
-                degrees = reverseRotation,
+                degrees = effectiveReverseRotation,
                 pivot = centre
             ) {
                 drawArc(
@@ -480,12 +488,12 @@ fun FrankEye(
                     radius =
                         baseRadius *
                                 0.82f *
-                                breathingPulse
+                                effectivePulse
                 ),
                 radius =
                     baseRadius *
                             0.82f *
-                            breathingPulse,
+                            effectivePulse,
                 center = centre
             )
 
@@ -498,7 +506,7 @@ fun FrankEye(
             )
 
             rotate(
-                degrees = scannerRotation,
+                degrees = effectiveScannerRotation,
                 pivot = centre
             ) {
                 drawArc(
@@ -532,8 +540,8 @@ fun FrankEye(
             val innerRadius =
                 baseRadius *
                         0.39f *
-                        coreScale *
-                        breathingPulse
+                        effectiveCoreScale *
+                        effectivePulse
 
             drawCircle(
                 brush = Brush.radialGradient(

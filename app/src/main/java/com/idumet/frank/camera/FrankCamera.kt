@@ -15,12 +15,20 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.UUID
+
+data class CameraFrame(
+    val file: File,
+    val frameId: String,
+    val capturedAtMs: Long,
+    val quality: String = "unknown"
+)
 
 class FrankCamera(
     context: Context,
     private val captureIntervalMs: Long = 1_000L,
     private val jpegQuality: Int = 80,
-    private val onFrameCaptured: ((File) -> Unit)? = null,
+    private val onFrameCaptured: ((CameraFrame) -> Unit)? = null,
     private val onError: ((String) -> Unit)? = null
 ) {
 
@@ -53,8 +61,7 @@ class FrankCamera(
 
     private val frameLock = Any()
 
-    @Volatile
-    private var latestFrameFile: File? = null
+    private val recentFrames = ArrayDeque<CameraFrame>()
 
     val isRunning: Boolean
         get() = isStarted.get()
@@ -63,7 +70,8 @@ class FrankCamera(
      * Starts the rear camera and captures a fresh JPEG frame approximately
      * once per second.
      *
-     * Frames remain local until copyLatestFrame() is called.
+     * Only the three newest frames stay in the app cache. They remain local
+     * until the server asks for evidence and copyFreshFrame() is called.
      */
     fun start(
         lifecycleOwner: LifecycleOwner,
@@ -119,19 +127,17 @@ class FrankCamera(
     }
 
     /**
-     * Returns a safe copy of the newest captured image.
+     * Returns a safe copy of the newest frame within the server's age limit.
      *
      * A copy is returned because the camera may replace its internal latest
      * frame while the WebSocket client is reading the image.
      */
-    fun copyLatestFrame(): File? {
+    fun copyFreshFrame(maxAgeMs: Long): CameraFrame? {
         synchronized(frameLock) {
-            val source =
-                latestFrameFile
-                    ?.takeIf {
-                        it.exists() &&
-                                it.length() > 0L
-                    }
+            val now = System.currentTimeMillis()
+            val source = recentFrames
+                    .lastOrNull { now - it.capturedAtMs <= maxAgeMs }
+                    ?.takeIf { it.file.exists() && it.file.length() > 0L }
                     ?: return null
 
             return try {
@@ -142,12 +148,12 @@ class FrankCamera(
                         appContext.cacheDir
                     )
 
-                source.copyTo(
+                source.file.copyTo(
                     target = copy,
                     overwrite = true
                 )
 
-                copy
+                CameraFrame(copy, source.frameId, source.capturedAtMs, source.quality)
             } catch (exception: Exception) {
                 reportError(
                     exception.message
@@ -201,8 +207,8 @@ class FrankCamera(
         stop()
 
         synchronized(frameLock) {
-            latestFrameFile?.delete()
-            latestFrameFile = null
+            recentFrames.forEach { it.file.delete() }
+            recentFrames.clear()
         }
 
         cameraExecutor.shutdownNow()
@@ -351,9 +357,7 @@ class FrankCamera(
                         return
                     }
 
-                    replaceLatestFrame(
-                        outputFile
-                    )
+                    rememberFrame(outputFile)
                 }
 
                 override fun onError(
@@ -374,27 +378,22 @@ class FrankCamera(
         )
     }
 
-    private fun replaceLatestFrame(
+    private fun rememberFrame(
         newFrame: File
     ) {
+        val frame = CameraFrame(
+            file = newFrame,
+            frameId = UUID.randomUUID().toString(),
+            capturedAtMs = System.currentTimeMillis()
+        )
         synchronized(frameLock) {
-            val previousFrame =
-                latestFrameFile
-
-            latestFrameFile = newFrame
-
-            if (
-                previousFrame != null &&
-                previousFrame.absolutePath !=
-                newFrame.absolutePath
-            ) {
-                previousFrame.delete()
-            }
+            recentFrames.addLast(frame)
+            while (recentFrames.size > MAX_BUFFERED_FRAMES) recentFrames.removeFirst().file.delete()
         }
 
         mainExecutor.execute {
             onFrameCaptured?.invoke(
-                newFrame
+                frame
             )
         }
     }
@@ -412,5 +411,9 @@ class FrankCamera(
         mainExecutor.execute {
             onError?.invoke(message)
         }
+    }
+
+    companion object {
+        private const val MAX_BUFFERED_FRAMES = 3
     }
 }

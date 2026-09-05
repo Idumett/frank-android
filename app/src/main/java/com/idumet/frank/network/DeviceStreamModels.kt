@@ -30,6 +30,8 @@ data class DeviceReply(
 
 data class DeviceAudioMessage(
     val type: String = "audio",
+    val trace: DeviceTrace,
     val mime: String = "audio/wav",
-    val audioBase64: String
+    val audioBase64: String,
+    val sentAt: String
 )
