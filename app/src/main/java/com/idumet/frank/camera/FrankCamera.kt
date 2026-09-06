@@ -273,7 +273,7 @@ class FrankCamera(
 
         scheduler.scheduleWithFixedDelay(
             {
-                captureFrame()
+                mainExecutor.execute { captureFrame() }
             },
             0L,
             captureIntervalMs.coerceAtLeast(500L),

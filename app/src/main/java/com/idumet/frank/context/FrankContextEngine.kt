@@ -11,7 +11,16 @@ import android.net.NetworkCapabilities
 import android.os.BatteryManager
 import android.os.Build
 import android.os.PowerManager
+import android.os.Looper
 import androidx.core.content.ContextCompat
+import android.location.Location
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.CurrentLocationRequest
+import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import com.google.android.gms.location.LocationServices
 import com.idumet.frank.camera.CameraFrame
 import java.time.Instant
@@ -19,11 +28,35 @@ import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.util.UUID
 import kotlin.coroutines.resume
-import kotlin.coroutines.suspendCoroutine
 
 class FrankContextEngine(context: Context) {
     private val app = context.applicationContext
     private val locationClient = LocationServices.getFusedLocationProviderClient(app)
+    private val locationUpdates = object : LocationCallback() {}
+    private var collectingLocation = false
+
+    @Suppress("MissingPermission")
+    fun startForeground() {
+        sessionOpen = true
+        if (collectingLocation || !(granted(Manifest.permission.ACCESS_FINE_LOCATION) || granted(Manifest.permission.ACCESS_COARSE_LOCATION))) return
+        collectingLocation = true
+        try {
+            // Warm the fused provider while the user speaks; a cold GPS fix may
+            // take longer than the bounded wait when sending a turn.
+            locationClient.requestLocationUpdates(
+                LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 10_000L)
+                    .setMinUpdateIntervalMillis(5_000L).build(),
+                locationUpdates, Looper.getMainLooper()
+            ).addOnFailureListener { collectingLocation = false }
+        } catch (_: SecurityException) { collectingLocation = false }
+    }
+
+    fun stopForeground() {
+        collectingLocation = false
+        locationClient.removeLocationUpdates(locationUpdates)
+        updateSessionOpen(false)
+    }
+
     @Volatile private var appState = "idle"
     @Volatile private var sessionOpen = true
     @Volatile private var evidence: CameraFrame? = null
@@ -40,11 +73,13 @@ class FrankContextEngine(context: Context) {
     fun updateEvidence(frame: CameraFrame) { evidence = frame }
 
     suspend fun snapshot(sessionId: String): ContextSnapshotV1 {
-        val now = Instant.now(); val expires = now.plusSeconds(30); val system = provenance("android_system", now)
         val precise = granted(Manifest.permission.ACCESS_FINE_LOCATION)
         val coarse = granted(Manifest.permission.ACCESS_COARSE_LOCATION)
+        // Request a current fix; lastLocation alone never activates the location provider.
+        // Stamp the snapshot after acquisition so sensor latency cannot age every signal.
+        val location = if (precise || coarse) currentLocation() else denied<LocationContextV1>("location", provenance("android_system", Instant.now()))
+        val now = Instant.now(); val expires = now.plusSeconds(30); val system = provenance("android_system", now)
         val locationPermission = when { precise -> known("granted", now, expires, system); coarse -> known("approximate", now, expires, system); else -> denied<String>("location", system) }
-        val location = if (precise || coarse) lastLocation(now, expires) else denied<LocationContextV1>("location", system)
         val movement = when (location.status) {
             "known" -> lastMovement ?: unknown("not_collected", provenance("android_sensor", now))
             "denied" -> denied<MovementContextV1>("location", provenance("android_system", now))
@@ -85,36 +120,46 @@ class FrankContextEngine(context: Context) {
     }
 
     @Suppress("MissingPermission")
-    private suspend fun lastLocation(now: Instant, expires: Instant): ContextSignalV1<LocationContextV1> = suspendCoroutine { continuation ->
-        try {
-            locationClient.lastLocation.addOnCompleteListener { task ->
-                val value = task.takeIf { it.isSuccessful }?.result
-                if (value == null) continuation.resume(unknown("unavailable", provenance("android_sensor", now)))
-                else {
-                    val observed = Instant.ofEpochMilli(value.time)
-                    if (observed.isAfter(now.plusSeconds(10))) {
-                        continuation.resume(conflicting("invalid_sequence", listOf("gps_time", "system_time"), provenance("android_sensor", now)))
-                        return@addOnCompleteListener
-                    }
-                    if (!value.accuracy.isFinite() || value.accuracy <= 0f || value.accuracy > 10_000f) {
-                        continuation.resume(conflicting("accuracy_mismatch", listOf("gps", "location_accuracy"), provenance("android_sensor", now)))
-                        return@addOnCompleteListener
-                    }
-                    lastMovement = if (value.hasSpeed()) {
-                        val speed = value.speed.toDouble()
-                        if (speed !in 0.0..150.0) conflicting("accuracy_mismatch", listOf("gps", "speed"), provenance("android_sensor", now))
-                        else {
-                            val state = when { speed >= 6.0 -> "vehicle"; speed >= 0.5 -> "walking"; else -> "stationary" }
-                            known(MovementContextV1(state, if (value.accuracy <= 25f) 0.8 else 0.5, speed, value.bearing.toDouble().takeIf { value.hasBearing() }), observed, minOf(expires, observed.plusSeconds(15)), provenance("android_sensor", now))
+    private suspend fun currentLocation(): ContextSignalV1<LocationContextV1> {
+        lastMovement = null
+        val value = try {
+            withTimeoutOrNull(5_000L) {
+                suspendCancellableCoroutine<Location?> { continuation ->
+                    val cancellation = CancellationTokenSource()
+                    continuation.invokeOnCancellation { cancellation.cancel() }
+                    val request = CurrentLocationRequest.Builder()
+                        .setPriority(Priority.PRIORITY_HIGH_ACCURACY)
+                        .setMaxUpdateAgeMillis(10_000L)
+                        .setDurationMillis(4_500L)
+                        .build()
+                    locationClient.getCurrentLocation(request, cancellation.token)
+                        .addOnCompleteListener { task ->
+                            if (continuation.isActive) {
+                                if (task.exception is SecurityException) {
+                                    continuation.resumeWith(Result.failure(task.exception!!))
+                                } else {
+                                    continuation.resume(task.takeIf { it.isSuccessful }?.result)
+                                }
+                            }
                         }
-                    } else unknown("unavailable", provenance("android_sensor", now))
-                    if (observed.plusSeconds(30).isBefore(now)) continuation.resume(stale(observed, observed.plusSeconds(30), provenance("android_sensor", now)))
-                    else continuation.resume(known(LocationContextV1(value.latitude, value.longitude, value.accuracy.toDouble(), value.altitude.takeIf { value.hasAltitude() }), observed, minOf(expires, observed.plusSeconds(30)), provenance("android_sensor", now)))
                 }
             }
         } catch (_: SecurityException) {
-            continuation.resume(denied("location", provenance("android_system", now)))
+            return denied("location", provenance("android_system", Instant.now()))
         }
+        val now = Instant.now()
+        val source = provenance("android_sensor", now)
+        if (value == null) return unknown("unavailable", source)
+        val signals = locationSignals(
+            LocationFix(value.time, value.latitude, value.longitude,
+                value.accuracy.toDouble().takeIf { value.hasAccuracy() },
+                value.altitude.takeIf { value.hasAltitude() },
+                value.speed.toDouble().takeIf { value.hasSpeed() },
+                value.bearing.toDouble().takeIf { value.hasBearing() }),
+            now
+        )
+        lastMovement = signals.second
+        return signals.first
     }
 
     private fun time(): TimeContextV1 { val now = ZonedDateTime.now(); return TimeContextV1(ZoneId.systemDefault().id, now.offset.totalSeconds / 60) }

@@ -22,6 +22,10 @@ import com.idumet.frank.network.FrankWebSocketClient
 import com.idumet.frank.service.AdaptiveSilenceDetector
 import com.idumet.frank.service.AudioRecorder
 import com.idumet.frank.service.FrankAudioPlayer
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -77,13 +81,8 @@ fun FrankConversationHost(
         onAssistantStateChanged(state)
     }
 
-    /*
-     * Camera capture is enabled automatically for the assistant overlay.
-     *
-     * The debug screen currently passes autoStartRecording = false,
-     * so camera capture remains disabled there.
-     */
-    val cameraEnabled = autoStartRecording
+    // Camera availability is independent of automatic microphone recording.
+    val cameraEnabled = true
 
     var isRecording by remember {
         mutableStateOf(false)
@@ -128,6 +127,8 @@ fun FrankConversationHost(
     val sessionOpen = remember {
         AtomicBoolean(true)
     }
+
+    var sendJob by remember { mutableStateOf<Job?>(null) }
 
     var requestInFlight by remember {
         mutableStateOf(false)
@@ -196,7 +197,7 @@ fun FrankConversationHost(
             AssistantState.Thinking
         )
 
-        coroutineScope.launch {
+        sendJob = coroutineScope.launch {
             var audioFile: File? = null
 
             try {
@@ -225,7 +226,11 @@ fun FrankConversationHost(
                     runCatching {
                         val snapshot = contextEngine.snapshot(webSocketClient.currentSessionId())
                         webSocketClient.sendContextSnapshot(snapshot)
-                    }.onFailure { Log.w("FrankDiagnostics", "context_snapshot_failed", it) }
+                    }.onFailure {
+                        if (it is CancellationException) throw it
+                        Log.w("FrankDiagnostics", "context_snapshot_failed", it)
+                    }
+                    if (!sessionOpen.get()) return@withContext
                     webSocketClient.sendRequest(
                         audioFile = audioFile
                     )
@@ -234,6 +239,7 @@ fun FrankConversationHost(
                 requestInFlight = true
                 recordingStatus = "Thinking..."
             } catch (exception: Exception) {
+                if (exception is CancellationException) throw exception
                 isRecording = false
                 clearSilenceDetection()
                 updateAssistantState(AssistantState.Error)
@@ -475,9 +481,17 @@ fun FrankConversationHost(
                         maxAgeMs: Long
                     ) {
                         coroutineScope.launch {
+                            if (!sessionOpen.get()) return@launch
                             val frame = if (cameraEnabled) {
                                 withContext(Dispatchers.IO) {
-                                    camera.copyFreshFrame(maxAgeMs)
+                                    withTimeoutOrNull(1_500L) {
+                                        var fresh = camera.copyFreshFrame(maxAgeMs)
+                                        while (fresh == null) {
+                                            delay(100L)
+                                            fresh = camera.copyFreshFrame(maxAgeMs)
+                                        }
+                                        fresh
+                                    }
                                 }
                             } else null
 
@@ -487,6 +501,10 @@ fun FrankConversationHost(
                                 return@launch
                             }
 
+                            if (!sessionOpen.get()) {
+                                frame.file.delete()
+                                return@launch
+                            }
                             try {
                                 withContext(Dispatchers.IO) {
                                     webSocketClient.sendFrame(frame, trace)
@@ -554,22 +572,30 @@ fun FrankConversationHost(
         }
     }
 
-    /*
-     * Start continuous camera capture as soon as the assistant overlay is
-     * composed. The newest local JPEg is replaced approximately every second.
-     */
-    DisposableEffect(
-        cameraEnabled,
-        lifecycleOwner
-    ) {
-        if (cameraEnabled) {
-            camera.start(
-                lifecycleOwner = lifecycleOwner
-            )
+    DisposableEffect(camera, lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> {
+                    contextEngine.startForeground()
+                    camera.start(lifecycleOwner)
+                }
+                Lifecycle.Event.ON_STOP -> {
+                    camera.stop()
+                    hasCameraFrame = false
+                    contextEngine.stopForeground()
+                }
+                else -> Unit
+            }
         }
-
+        lifecycleOwner.lifecycle.addObserver(observer)
+        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            contextEngine.startForeground()
+            camera.start(lifecycleOwner)
+        }
         onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
             camera.release()
+            contextEngine.stopForeground()
         }
     }
 
@@ -589,6 +615,8 @@ fun FrankConversationHost(
 
                     Lifecycle.Event.ON_STOP -> {
                         sessionOpen.set(false)
+                        sendJob?.cancel()
+                        sendJob = null
                         mainHandler.removeCallbacksAndMessages(null)
                         if (requestInFlight) {
                             webSocketClient.stop()
@@ -656,7 +684,7 @@ fun FrankConversationHost(
     DisposableEffect(Unit) {
         onDispose {
             sessionOpen.set(false)
-            contextEngine.updateSessionOpen(false)
+            contextEngine.stopForeground()
             mainHandler.removeCallbacksAndMessages(null)
             if (requestInFlight) {
                 webSocketClient.stop()
