@@ -7,7 +7,6 @@ import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
-import android.media.audiofx.NoiseSuppressor
 import androidx.core.content.ContextCompat
 import java.io.File
 import java.io.FileOutputStream
@@ -36,7 +35,6 @@ class AudioRecorder(
 
     private var audioRecord: AudioRecord? = null
     private var recordingThread: Thread? = null
-    private var noiseSuppressor: NoiseSuppressor? = null
 
     private var pcmFile: File? = null
     private var wavFile: File? = null
@@ -119,8 +117,6 @@ class AudioRecorder(
         audioRecord = recorder
         pcmFile = createdPcmFile
         wavFile = createdWavFile
-
-        enableNoiseSuppression(recorder)
 
         recording.set(true)
         try {
@@ -276,9 +272,6 @@ class AudioRecorder(
     }
 
     private fun releaseRecorder() {
-        noiseSuppressor?.release()
-        noiseSuppressor = null
-
         audioRecord?.release()
         audioRecord = null
 
@@ -291,21 +284,6 @@ class AudioRecorder(
 
         pcmFile = null
         wavFile = null
-    }
-
-    private fun enableNoiseSuppression(
-        recorder: AudioRecord
-    ) {
-        if (!NoiseSuppressor.isAvailable()) {
-            return
-        }
-
-        noiseSuppressor =
-            NoiseSuppressor.create(
-                recorder.audioSessionId
-            )?.apply {
-                enabled = true
-            }
     }
 
     private fun ensureMicrophonePermission() {
