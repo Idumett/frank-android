@@ -280,13 +280,13 @@ fun FrankConversationHost(
                 lateinit var detector: AdaptiveSilenceDetector
                 detector = AdaptiveSilenceDetector(
                         calibrationDurationMs = 500L,
-                        requiredSpeechDurationMs = 150L,
+                        requiredSpeechDurationMs = 100L,
                         endSilenceDurationMs = 1_600L,
                         noSpeechTimeoutMs = 8_000L,
                         maximumRecordingDurationMs = 15_000L,
-                        thresholdMultiplier = 2.2,
-                        minimumThreshold = 500.0,
-                        thresholdMargin = 250.0,
+                        thresholdMultiplier = 1.5,
+                        minimumThreshold = 80.0,
+                        thresholdMargin = 40.0,
                         onSpeechStarted = {
                             mainHandler.post {
                                 if (silenceDetector !== detector || !isRecording) return@post
@@ -323,8 +323,17 @@ fun FrankConversationHost(
                                     AdaptiveSilenceDetector
                                         .FinishReason
                                         .NO_SPEECH_TIMEOUT -> {
-                                        // Follow-up listening may legitimately be silent.
-                                        // Discard it instead of sending an empty STT request.
+                                        if (detector.hasCapturedAudioSignal()) {
+                                            stopAndSendRecording(
+                                                statusBeforeSending =
+                                                    "Checking what I heard"
+                                            )
+                                            return@post
+                                        }
+
+                                        // An all-zero input usually means the emulator or
+                                        // recorder has no microphone source. Keep that case
+                                        // local instead of sending empty audio to STT.
                                         if (!stopInProgress.compareAndSet(false, true)) return@post
                                         clearSilenceDetection()
                                         sendJob = coroutineScope.launch {

@@ -5,13 +5,13 @@ import kotlin.math.sqrt
 
 class AdaptiveSilenceDetector(
     private val calibrationDurationMs: Long = 500L,
-    private val requiredSpeechDurationMs: Long = 150L,
+    private val requiredSpeechDurationMs: Long = 100L,
     private val endSilenceDurationMs: Long = 1_600L,
     private val noSpeechTimeoutMs: Long = 8_000L,
     private val maximumRecordingDurationMs: Long = 15_000L,
-    private val thresholdMultiplier: Double = 2.2,
-    private val minimumThreshold: Double = 500.0,
-    private val thresholdMargin: Double = 250.0,
+    private val thresholdMultiplier: Double = 1.5,
+    private val minimumThreshold: Double = 80.0,
+    private val thresholdMargin: Double = 40.0,
     private val onSpeechStarted: () -> Unit = {},
     private val clockMs: () -> Long = { System.nanoTime() / 1_000_000L },
     private val onFinished: (FinishReason) -> Unit
@@ -116,6 +116,15 @@ class AdaptiveSilenceDetector(
 
     fun currentSpeechThreshold(): Double {
         return speechThreshold
+    }
+
+    /**
+     * The speech detector should decide when to stop, not prevent usable audio
+     * from reaching STT. A small non-zero peak is enough to distinguish a live
+     * microphone from the all-zero stream produced when emulator input is absent.
+     */
+    fun hasCapturedAudioSignal(minimumPeakRms: Double = 24.0): Boolean {
+        return peakRms >= minimumPeakRms
     }
 
     private fun updateCalibration(rms: Double) {

@@ -43,6 +43,22 @@ class AdaptiveSilenceDetectorTest {
         assertEquals(listOf(FinishReason.SILENCE_AFTER_SPEECH), r.finishes)
     }
 
+    @Test fun aQuietVoiceIsRecognized() {
+        val r = Recording()
+        r.samples(500, 15)
+        r.samples(300, 100)
+        r.samples(1_600, 15)
+        assertEquals(1, r.starts)
+        assertEquals(listOf(FinishReason.SILENCE_AFTER_SPEECH), r.finishes)
+    }
+
+    @Test fun aLiveMicrophoneSignalCanFallBackToServerSpeechRecognition() {
+        val r = Recording()
+        r.samples(8_000, 30)
+        assertEquals(listOf(FinishReason.NO_SPEECH_TIMEOUT), r.finishes)
+        assertTrue(r.detector.hasCapturedAudioSignal())
+    }
+
     @Test fun aBriefNoiseDoesNotCountAsSpeech() {
         val r = Recording()
         r.samples(1_000, 0)
