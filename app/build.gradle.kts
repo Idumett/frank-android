@@ -7,7 +7,7 @@ val localProperties = Properties().apply {
 }
 val frankServerUrl = providers.gradleProperty("frankServerUrl")
     .orElse(providers.provider { localProperties.getProperty("frank.server.url") })
-    .orElse("http://192.168.0.83:3000/")
+    .orElse("https://35.242.143.73.sslip.io/")
     .get()
 val frankAccessToken = providers.gradleProperty("frankAccessToken")
     .orElse(providers.provider { localProperties.getProperty("frank.access.token") })
