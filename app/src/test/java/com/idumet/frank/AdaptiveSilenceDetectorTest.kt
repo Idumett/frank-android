@@ -70,7 +70,7 @@ class AdaptiveSilenceDetectorTest {
 
     @Test fun noiseEstimateKeepsAdaptingAfterCalibration() {
         val r = Recording()
-        r.samples(500, 300)
+        r.samples(500, 60)
         val calibrated = r.detector.currentNoiseFloor()
         r.samples(2_000, 20)
         assertTrue(r.detector.currentNoiseFloor() < calibrated / 2)
