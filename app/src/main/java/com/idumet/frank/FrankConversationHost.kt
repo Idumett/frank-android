@@ -42,6 +42,7 @@ fun FrankConversationHost(
     onAssistantStateChanged: (
         AssistantState
     ) -> Unit = {},
+    onStatusMessageChanged: (String) -> Unit = {},
     onClose: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -259,7 +260,7 @@ fun FrankConversationHost(
     fun startRecording(
         useSilenceDetection: Boolean
     ) {
-        if (isRecording) {
+        if (isRecording || stopInProgress.get() || requestInFlight) {
             return
         }
 
@@ -276,10 +277,10 @@ fun FrankConversationHost(
             updateAssistantState(AssistantState.Listening)
 
             if (useSilenceDetection) {
-                val detector =
-                    AdaptiveSilenceDetector(
+                lateinit var detector: AdaptiveSilenceDetector
+                detector = AdaptiveSilenceDetector(
                         calibrationDurationMs = 500L,
-                        requiredSpeechDurationMs = 350L,
+                        requiredSpeechDurationMs = 150L,
                         endSilenceDurationMs = 1_600L,
                         noSpeechTimeoutMs = 8_000L,
                         maximumRecordingDurationMs = 15_000L,
@@ -288,6 +289,7 @@ fun FrankConversationHost(
                         thresholdMargin = 250.0,
                         onSpeechStarted = {
                             mainHandler.post {
+                                if (silenceDetector !== detector || !isRecording) return@post
                                 recordingStatus = "Listening..."
 
                                 updateAssistantState(
@@ -297,6 +299,8 @@ fun FrankConversationHost(
                         },
                         onFinished = { reason ->
                             mainHandler.post {
+                                if (silenceDetector !== detector || !isRecording || !sessionOpen.get()) return@post
+                                Log.d("FrankDiagnostics", "recording_finished reason=$reason peakRms=${detector.currentPeakRms().toInt()} threshold=${detector.currentSpeechThreshold().toInt()}")
                                 when (reason) {
                                     AdaptiveSilenceDetector
                                         .FinishReason
@@ -319,10 +323,20 @@ fun FrankConversationHost(
                                     AdaptiveSilenceDetector
                                         .FinishReason
                                         .NO_SPEECH_TIMEOUT -> {
-                                        stopAndSendRecording(
-                                            statusBeforeSending =
-                                                "No speech detected"
-                                        )
+                                        // Follow-up listening may legitimately be silent.
+                                        // Discard it instead of sending an empty STT request.
+                                        if (!stopInProgress.compareAndSet(false, true)) return@post
+                                        clearSilenceDetection()
+                                        sendJob = coroutineScope.launch {
+                                            try {
+                                                withContext(Dispatchers.IO) { audioRecorder.cancel() }
+                                            } finally {
+                                                stopInProgress.set(false)
+                                                isRecording = false
+                                                recordingStatus = "I didn’t hear anything. Tap Speak to Frank to try again."
+                                                updateAssistantState(AssistantState.Idle)
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -560,6 +574,7 @@ fun FrankConversationHost(
     DisposableEffect(audioRecorder) {
         audioRecorder.setErrorListener { message ->
             mainHandler.post {
+                audioRecorder.cancel()
                 isRecording = false
                 clearSilenceDetection()
                 recordingStatus = frankUserMessage(message)
@@ -726,7 +741,13 @@ fun FrankConversationHost(
         }
     }
 
+    LaunchedEffect(recordingStatus) { onStatusMessageChanged(recordingStatus) }
+
     ConversationControls(
+        canStartListening = isStreamReady && !isRecording && !requestInFlight &&
+            !stopInProgress.get() && lastHapticState != AssistantState.Speaking &&
+            lastHapticState != AssistantState.Thinking,
+        onStartListening = { startRecording(true) },
         isRecording = isRecording,
         isStreamReady = isStreamReady,
         recordingStatus = recordingStatus,

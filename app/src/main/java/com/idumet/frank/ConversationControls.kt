@@ -12,6 +12,8 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 fun ConversationControls(
+    canStartListening: Boolean,
+    onStartListening: () -> Unit,
     isRecording: Boolean,
     isStreamReady: Boolean,
     recordingStatus: String,
@@ -87,6 +89,16 @@ fun ConversationControls(
                     top = 12.dp
                 )
             )
+        }
+    }
+
+    if (!showDeveloperControls) {
+        Button(
+            modifier = Modifier.padding(top = 16.dp).sizeIn(minHeight = 48.dp),
+            enabled = canStartListening,
+            onClick = onStartListening
+        ) {
+            Text("Speak to Frank")
         }
     }
 

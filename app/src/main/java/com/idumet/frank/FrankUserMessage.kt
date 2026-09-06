@@ -3,6 +3,8 @@ package com.idumet.frank
 fun frankUserMessage(message: String?): String {
     val value = message.orEmpty().lowercase()
     return when {
+        value.contains("no speech recognized") || value.contains("no speech detected") ->
+            "Frank didn’t hear any speech. Check your microphone input and try speaking again."
         value.contains("401") || value.contains("unauthor") ->
             "Frank could not verify this app. Check the app configuration and try again."
         value.contains("timeout") || value.contains("timed out") ->

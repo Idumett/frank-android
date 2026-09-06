@@ -123,7 +123,15 @@ class AudioRecorder(
         enableNoiseSuppression(recorder)
 
         recording.set(true)
-        recorder.startRecording()
+        try {
+            recorder.startRecording()
+            check(recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                "Microphone did not start recording"
+            }
+        } catch (exception: Exception) {
+            cancel()
+            throw exception
+        }
 
         recordingThread = thread(
             name = "FrankAudioRecorder",
@@ -198,9 +206,9 @@ class AudioRecorder(
                         shortBuffer.size
                     )
 
-                    if (sampleCount <= 0) {
-                        continue
-                    }
+                    if (!recording.get()) break
+                    check(sampleCount >= 0) { "Microphone read failed (code $sampleCount)" }
+                    if (sampleCount == 0) continue
 
                     writeShortSamples(
                         output = output,
@@ -218,10 +226,9 @@ class AudioRecorder(
                 }
             }
         } catch (exception: Exception) {
-            recording.set(false)
-            errorListener?.invoke(
-                exception.message ?: "Audio recording failed"
-            )
+            if (recording.getAndSet(false)) {
+                errorListener?.invoke(exception.message ?: "Audio recording failed")
+            }
         }
     }
 

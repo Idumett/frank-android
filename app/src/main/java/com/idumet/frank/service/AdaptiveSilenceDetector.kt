@@ -5,7 +5,7 @@ import kotlin.math.sqrt
 
 class AdaptiveSilenceDetector(
     private val calibrationDurationMs: Long = 500L,
-    private val requiredSpeechDurationMs: Long = 350L,
+    private val requiredSpeechDurationMs: Long = 150L,
     private val endSilenceDurationMs: Long = 1_600L,
     private val noSpeechTimeoutMs: Long = 8_000L,
     private val maximumRecordingDurationMs: Long = 15_000L,
@@ -13,6 +13,7 @@ class AdaptiveSilenceDetector(
     private val minimumThreshold: Double = 500.0,
     private val thresholdMargin: Double = 250.0,
     private val onSpeechStarted: () -> Unit = {},
+    private val clockMs: () -> Long = { System.nanoTime() / 1_000_000L },
     private val onFinished: (FinishReason) -> Unit
 ) {
 
@@ -28,17 +29,18 @@ class AdaptiveSilenceDetector(
     private var ambientLevelTotal = 0.0
     private var ambientSampleCount = 0
 
-    private var noiseFloor = minimumThreshold
+    private var noiseFloor = 0.0
     private var speechThreshold = minimumThreshold
 
     private var candidateSpeechStartedAt: Long? = null
     private var lastSpeechAt: Long? = null
 
+    private var peakRms = 0.0
     private var hasDetectedSpeech = false
     private var hasFinished = false
 
     fun start() {
-        val now = System.currentTimeMillis()
+        val now = clockMs()
 
         recordingStartedAt = now
         calibrationFinishedAt = now + calibrationDurationMs
@@ -46,12 +48,13 @@ class AdaptiveSilenceDetector(
         ambientLevelTotal = 0.0
         ambientSampleCount = 0
 
-        noiseFloor = minimumThreshold
+        noiseFloor = 0.0
         speechThreshold = minimumThreshold
 
         candidateSpeechStartedAt = null
         lastSpeechAt = null
 
+        peakRms = 0.0
         hasDetectedSpeech = false
         hasFinished = false
     }
@@ -61,21 +64,20 @@ class AdaptiveSilenceDetector(
             return
         }
 
-        val now = System.currentTimeMillis()
+        val now = clockMs()
         val elapsed = now - recordingStartedAt
         val rms = calculateRms(samples, sampleCount)
+        peakRms = max(peakRms, rms)
 
         if (elapsed >= maximumRecordingDurationMs) {
             finish(FinishReason.MAXIMUM_DURATION)
             return
         }
 
-        if (now < calibrationFinishedAt) {
+        // Speech can begin immediately. Only quiet samples belong in the
+        // ambient estimate; treating the opening words as noise hides speech.
+        if (now < calibrationFinishedAt && rms < minimumThreshold) {
             updateCalibration(rms)
-            return
-        }
-
-        if (ambientSampleCount > 0) {
             calculateThreshold()
         }
 
@@ -104,6 +106,9 @@ class AdaptiveSilenceDetector(
     fun reset() {
         hasFinished = true
     }
+
+    /** Signal level only; no speech content is stored in diagnostics. */
+    fun currentPeakRms(): Double = peakRms
 
     fun currentNoiseFloor(): Double {
         return noiseFloor

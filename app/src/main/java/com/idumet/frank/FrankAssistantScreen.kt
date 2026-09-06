@@ -57,6 +57,8 @@ fun FrankAssistantScreen(
         mutableStateOf(AssistantState.Idle)
     }
 
+    var statusMessage by remember { mutableStateOf("Frank is ready") }
+
     var contentVisible by remember {
         mutableStateOf(false)
     }
@@ -110,7 +112,7 @@ fun FrankAssistantScreen(
 
     val statusSubtitle = when (assistantState) {
         AssistantState.Idle ->
-            "Frank is ready"
+            statusMessage
 
         AssistantState.Listening ->
             "Speak naturally"
@@ -122,7 +124,7 @@ fun FrankAssistantScreen(
             "Frank is responding"
 
         AssistantState.Error ->
-            "Something interrupted the request"
+            statusMessage
     }
 
     val stateGlowColor = when (assistantState) {
@@ -294,6 +296,7 @@ fun FrankAssistantScreen(
                     onAssistantStateChanged = {
                         assistantState = it
                     },
+                    onStatusMessageChanged = { statusMessage = it },
                     onClose = onClose
                 )
             }
