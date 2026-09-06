@@ -4,8 +4,11 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.Camera
+import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.SurfaceOrientedMeteringPointFactory
 import androidx.camera.core.UseCase
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
@@ -46,6 +49,9 @@ class FrankCamera(
 
     private var cameraProvider:
             ProcessCameraProvider? = null
+
+    private var boundCamera:
+            Camera? = null
 
     private var imageCapture:
             ImageCapture? = null
@@ -132,11 +138,14 @@ class FrankCamera(
      * A copy is returned because the camera may replace its internal latest
      * frame while the WebSocket client is reading the image.
      */
-    fun copyFreshFrame(maxAgeMs: Long): CameraFrame? {
+    fun copyFreshFrame(maxAgeMs: Long, capturedAfterMs: Long = Long.MIN_VALUE): CameraFrame? {
         synchronized(frameLock) {
             val now = System.currentTimeMillis()
             val source = recentFrames
-                    .lastOrNull { now - it.capturedAtMs <= maxAgeMs }
+                    .lastOrNull {
+                        now - it.capturedAtMs <= maxAgeMs &&
+                                it.capturedAtMs >= capturedAfterMs
+                    }
                     ?.takeIf { it.file.exists() && it.file.length() > 0L }
                     ?: return null
 
@@ -166,6 +175,45 @@ class FrankCamera(
     }
 
     /**
+     * Clears ambient frames, meters and focuses on the centre of the view, then
+     * takes a dedicated evidence image. The returned time is the earliest frame
+     * the caller may use for this request.
+     */
+    fun requestFocusedFrame(): Long {
+        val requestedAfterMs = System.currentTimeMillis()
+        synchronized(frameLock) {
+            recentFrames.forEach { it.file.delete() }
+            recentFrames.clear()
+        }
+        stopCaptureScheduler()
+        mainExecutor.execute {
+            val camera = boundCamera
+            val capture = imageCapture
+            if (!isStarted.get() || camera == null || capture == null) {
+                startCaptureScheduler()
+                return@execute
+            }
+            val point = SurfaceOrientedMeteringPointFactory(1f, 1f).createPoint(.5f, .5f)
+            val action = FocusMeteringAction.Builder(point)
+                .setAutoCancelDuration(2, TimeUnit.SECONDS)
+                .build()
+            val focus = camera.cameraControl.startFocusAndMetering(action)
+            focus.addListener(
+                {
+                    capture.flashMode = ImageCapture.FLASH_MODE_AUTO
+                    captureFrame()
+                    mainExecutor.execute {
+                        capture.flashMode = ImageCapture.FLASH_MODE_OFF
+                        startCaptureScheduler()
+                    }
+                },
+                mainExecutor
+            )
+        }
+        return requestedAfterMs
+    }
+
+    /**
      * Stops frame capture and releases this class's CameraX use case.
      */
     fun stop() {
@@ -191,6 +239,7 @@ class FrankCamera(
             }
 
             boundUseCase = null
+            boundCamera = null
             imageCapture = null
             cameraProvider = null
         }
@@ -242,7 +291,7 @@ class FrankCamera(
                 provider.unbind(it)
             }
 
-            provider.bindToLifecycle(
+            boundCamera = provider.bindToLifecycle(
                 lifecycleOwner,
                 selector,
                 captureUseCase

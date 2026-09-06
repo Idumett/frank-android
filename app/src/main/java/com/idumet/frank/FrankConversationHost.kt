@@ -501,17 +501,19 @@ fun FrankConversationHost(
 
                     override fun onFrameRequested(
                         trace: com.idumet.frank.network.DeviceTrace,
-                        maxAgeMs: Long
+                        maxAgeMs: Long,
+                        frameRequestId: String
                     ) {
+                        val requestedAfterMs = camera.requestFocusedFrame()
                         coroutineScope.launch {
                             if (!sessionOpen.get()) return@launch
                             val frame = if (cameraEnabled) {
                                 withContext(Dispatchers.IO) {
-                                    withTimeoutOrNull(1_500L) {
-                                        var fresh = camera.copyFreshFrame(maxAgeMs)
+                                    withTimeoutOrNull(3_500L) {
+                                        var fresh = camera.copyFreshFrame(maxAgeMs, requestedAfterMs)
                                         while (fresh == null) {
                                             delay(100L)
-                                            fresh = camera.copyFreshFrame(maxAgeMs)
+                                            fresh = camera.copyFreshFrame(maxAgeMs, requestedAfterMs)
                                         }
                                         fresh
                                     }
@@ -530,7 +532,7 @@ fun FrankConversationHost(
                             }
                             try {
                                 withContext(Dispatchers.IO) {
-                                    webSocketClient.sendFrame(frame, trace)
+                                    webSocketClient.sendFrame(frame, trace, frameRequestId)
                                 }
                                 recordingStatus = "Checking the current camera view..."
                             } catch (exception: Exception) {

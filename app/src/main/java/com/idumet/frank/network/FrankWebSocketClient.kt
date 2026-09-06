@@ -37,7 +37,7 @@ class FrankWebSocketClient(
         fun onError(message: String)
         fun onDisconnected()
 
-        fun onFrameRequested(trace: DeviceTrace, maxAgeMs: Long) {
+        fun onFrameRequested(trace: DeviceTrace, maxAgeMs: Long, frameRequestId: String) {
             // Optional callback for clients without a camera.
         }
 
@@ -49,6 +49,7 @@ class FrankWebSocketClient(
     private data class DeviceFrameMessage(
         val type: String = "frame",
         val trace: DeviceTrace,
+        val frameRequestId: String,
         val frameId: String,
         val seq: Int,
         val mime: String,
@@ -216,7 +217,8 @@ class FrankWebSocketClient(
     /** Sends one frame after the server requests evidence for this turn. */
     fun sendFrame(
         frame: CameraFrame,
-        trace: DeviceTrace
+        trace: DeviceTrace,
+        frameRequestId: String
     ): Int {
         check(isReady) {
             "Frank device stream is not ready"
@@ -245,6 +247,7 @@ class FrankWebSocketClient(
         val message =
             DeviceFrameMessage(
                 trace = trace,
+                frameRequestId = frameRequestId,
                 frameId = frame.frameId,
                 seq = sequence,
                 mime = mimeType,
@@ -426,7 +429,9 @@ class FrankWebSocketClient(
                 "frame_required" -> {
                     val trace = gson.fromJson(jsonObject.get("trace"), DeviceTrace::class.java)
                     val maxAgeMs = jsonObject.get("maxAgeMs")?.asLong ?: DEFAULT_FRAME_MAX_AGE_MS
-                    listener.onFrameRequested(trace, maxAgeMs)
+                    val frameRequestId = jsonObject.get("frameRequestId")?.asString
+                        ?: throw IllegalStateException("Camera request has no identity")
+                    listener.onFrameRequested(trace, maxAgeMs, frameRequestId)
                 }
 
                 "context_ack" -> {
