@@ -16,6 +16,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.idumet.frank.camera.FrankCamera
+import com.idumet.frank.camera.CameraFrame
 import com.idumet.frank.context.FrankContextEngine
 import com.idumet.frank.network.FrankClient
 import com.idumet.frank.network.FrankWebSocketClient
@@ -135,6 +136,10 @@ fun FrankConversationHost(
         mutableStateOf(false)
     }
 
+    var cameraCaptureAfterMs by remember {
+        mutableStateOf(Long.MIN_VALUE)
+    }
+
     val camera = remember {
         FrankCamera(
             context = context.applicationContext,
@@ -200,6 +205,7 @@ fun FrankConversationHost(
 
         sendJob = coroutineScope.launch {
             var audioFile: File? = null
+            var evidenceFrame: CameraFrame? = null
 
             try {
                 /*
@@ -223,6 +229,12 @@ fun FrankConversationHost(
 
                 recordingStatus = "Sending audio..."
 
+                evidenceFrame = if (cameraEnabled) {
+                    withContext(Dispatchers.IO) {
+                        camera.copyFreshFrame(4_000L, cameraCaptureAfterMs)
+                    }
+                } else null
+
                 withContext(Dispatchers.IO) {
                     runCatching {
                         val snapshot = contextEngine.snapshot(webSocketClient.currentSessionId())
@@ -233,7 +245,8 @@ fun FrankConversationHost(
                     }
                     if (!sessionOpen.get()) return@withContext
                     webSocketClient.sendRequest(
-                        audioFile = audioFile
+                        audioFile = audioFile,
+                        evidenceFrame = evidenceFrame
                     )
                 }
 
@@ -249,7 +262,7 @@ fun FrankConversationHost(
             } finally {
                 deleteTemporaryFiles(
                     audioFile = audioFile,
-                    imageFile = null
+                    imageFile = evidenceFrame?.file
                 )
 
                 stopInProgress.set(false)
@@ -371,6 +384,11 @@ fun FrankConversationHost(
 
             audioRecorder.start()
             isRecording = true
+            cameraCaptureAfterMs = if (cameraEnabled) {
+                camera.requestFocusedFrame(useFlash = false)
+            } else {
+                Long.MIN_VALUE
+            }
 
             recordingStatus =
                 when {
@@ -504,7 +522,7 @@ fun FrankConversationHost(
                         maxAgeMs: Long,
                         frameRequestId: String
                     ) {
-                        val requestedAfterMs = camera.requestFocusedFrame()
+                        val requestedAfterMs = camera.requestFocusedFrame(useFlash = true)
                         coroutineScope.launch {
                             if (!sessionOpen.get()) return@launch
                             val frame = if (cameraEnabled) {

@@ -179,7 +179,7 @@ class FrankCamera(
      * takes a dedicated evidence image. The returned time is the earliest frame
      * the caller may use for this request.
      */
-    fun requestFocusedFrame(): Long {
+    fun requestFocusedFrame(useFlash: Boolean = false): Long {
         val requestedAfterMs = System.currentTimeMillis()
         synchronized(frameLock) {
             recentFrames.forEach { it.file.delete() }
@@ -200,7 +200,11 @@ class FrankCamera(
             val focus = camera.cameraControl.startFocusAndMetering(action)
             focus.addListener(
                 {
-                    capture.flashMode = ImageCapture.FLASH_MODE_AUTO
+                    capture.flashMode = if (useFlash) {
+                        ImageCapture.FLASH_MODE_AUTO
+                    } else {
+                        ImageCapture.FLASH_MODE_OFF
+                    }
                     captureFrame()
                     mainExecutor.execute {
                         capture.flashMode = ImageCapture.FLASH_MODE_OFF

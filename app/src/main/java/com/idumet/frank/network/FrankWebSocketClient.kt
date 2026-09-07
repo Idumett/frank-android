@@ -13,11 +13,16 @@ import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonParser
 import okhttp3.OkHttpClient
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import java.io.File
+import java.io.IOException
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -340,7 +345,8 @@ class FrankWebSocketClient(
      * working if camera permission is unavailable or no frame exists.
      */
     fun sendRequest(
-        audioFile: File
+        audioFile: File,
+        evidenceFrame: CameraFrame? = null
     ): String {
         val trace =
             DeviceTrace(
@@ -353,11 +359,43 @@ class FrankWebSocketClient(
 
         try {
             sendAudio(audioFile, trace)
+            evidenceFrame?.let { uploadPreparedEvidence(it, trace) }
             return trace.requestId
         } catch (exception: Exception) {
             requestStartedAt.remove(trace.requestId)
             throw exception
         }
+    }
+
+    private fun uploadPreparedEvidence(frame: CameraFrame, trace: DeviceTrace) {
+        val mime = determineImageMimeType(frame.file)
+        val bytes = frame.file.readBytes()
+        check(bytes.size.toLong() in 1..MAX_IMAGE_BYTES) { "Camera frame is empty" }
+        val request = Request.Builder()
+            .url(evidenceUploadUrl(trace.requestId))
+            .header("X-Frank-Session-Id", sessionId)
+            .header("X-Frank-Frame-Id", frame.frameId)
+            .header("X-Frank-Captured-At", Instant.ofEpochMilli(frame.capturedAtMs).toString())
+            .header("X-Frank-Frame-Age-Ms", (System.currentTimeMillis() - frame.capturedAtMs).coerceAtLeast(0L).toString())
+            .header("X-Frank-Frame-Quality", frame.quality)
+            .apply {
+                if (BuildConfig.FRANK_ACCESS_TOKEN.isNotBlank()) {
+                    header("Authorization", "Bearer ${BuildConfig.FRANK_ACCESS_TOKEN}")
+                }
+            }
+            .post(bytes.toRequestBody(mime.toMediaType()))
+            .build()
+        client.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, exception: IOException) {
+                Log.w(LOG_TAG, "evidence_upload_failed requestId=${trace.requestId}", exception)
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    Log.d(LOG_TAG, "evidence_uploaded requestId=${trace.requestId} status=${it.code} bytes=${bytes.size}")
+                }
+            }
+        })
     }
 
     private fun sendHello(
@@ -617,5 +655,8 @@ class FrankWebSocketClient(
             }
             return "$websocketBase/v1/device/stream"
         }
+
+        private fun evidenceUploadUrl(requestId: String): String =
+            "${BuildConfig.FRANK_SERVER_URL.trimEnd('/')}/v1/device/evidence/$requestId"
     }
 }
