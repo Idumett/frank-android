@@ -46,6 +46,8 @@ jobs:
           FRANK_UPLOAD_STORE_PASSWORD: ${{ secrets.FRANK_UPLOAD_STORE_PASSWORD }}
           FRANK_UPLOAD_KEY_ALIAS: ${{ secrets.FRANK_UPLOAD_KEY_ALIAS }}
           FRANK_UPLOAD_KEY_PASSWORD: ${{ secrets.FRANK_UPLOAD_KEY_PASSWORD }}
+          FRANK_SERVER_URL_RAW: ${{ secrets.FRANK_SERVER_URL }}
+          FRANK_ACCESS_TOKEN_RAW: ${{ secrets.FRANK_ACCESS_TOKEN }}
         run: |
           code="${{ inputs.version_code }}"
           name="${{ inputs.version_name }}"
@@ -57,9 +59,11 @@ jobs:
               name="1.0.${GITHUB_RUN_NUMBER}"
             fi
           fi
+          server_url=$(printf '%s' "$FRANK_SERVER_URL_RAW" | tr -d '\r\n')
+          access_token=$(printf '%s' "$FRANK_ACCESS_TOKEN_RAW" | tr -d '\r\n')
           ./gradlew bundleRelease -PfrankVersionCode="$code" -PfrankVersionName="$name" \
-            -PfrankServerUrl="${{ secrets.FRANK_SERVER_URL }}" \
-            -PfrankAccessToken="${{ secrets.FRANK_ACCESS_TOKEN }}"
+            -PfrankServerUrl="$server_url" \
+            -PfrankAccessToken="$access_token"
       - name: Upload bundle and Play listing
         env:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
