@@ -21,8 +21,10 @@ environment with:
 - `FRANK_SERVER_URL`
 - `FRANK_ACCESS_TOKEN`
 
-Run it manually with an increasing version code and version name, or push an
-`android-vX.Y.Z` tag. Keep the environment protected so only an approved release
+Every commit pushed to `main` publishes a new internal-testing build. These jobs are
+serialized and receive a version code derived from the repository commit count.
+The workflow can also run manually with an explicit, larger version code, or from
+an `android-vX.Y.Z` tag. Keep the environment protected so only an approved release
 can expose a new token to testers.
 
 Before promoting beyond internal testing, complete the physical-device checklist,

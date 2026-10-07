@@ -10,8 +10,14 @@ on:
         description: User-facing version
         required: true
   push:
+    branches:
+      - main
     tags:
       - 'android-v*'
+
+concurrency:
+  group: play-internal-release
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -43,8 +49,14 @@ jobs:
         run: |
           code="${{ inputs.version_code }}"
           name="${{ inputs.version_name }}"
-          if [[ -z "$code" ]]; then code="${GITHUB_REF_NAME#android-v}"; code="${code//./}"; fi
-          if [[ -z "$name" ]]; then name="${GITHUB_REF_NAME#android-v}"; fi
+          if [[ -z "$code" ]]; then code=$((100000 + $(git rev-list --count HEAD))); fi
+          if [[ -z "$name" ]]; then
+            if [[ "$GITHUB_REF" == refs/tags/android-v* ]]; then
+              name="${GITHUB_REF_NAME#android-v}"
+            else
+              name="1.0.${GITHUB_RUN_NUMBER}"
+            fi
+          fi
           ./gradlew bundleRelease -PfrankVersionCode="$code" -PfrankVersionName="$name" \
             -PfrankServerUrl="${{ secrets.FRANK_SERVER_URL }}" \
             -PfrankAccessToken="${{ secrets.FRANK_ACCESS_TOKEN }}"
