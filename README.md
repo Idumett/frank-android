@@ -10,10 +10,10 @@ the response.
 ## Current position
 
 Frank V1 is connected to the live staging server and distributed through Google
-Play Internal Testing. The current signed release is version `1.0.0` (version code
-`1`) and supports Android 9 through Android 16, API 28-36. Access is currently
-limited to the configured tester email list while the new Play developer account
-completes Google's closed-testing and production-access requirements.
+Play Internal Testing. CI assigns each `main` build its own version name and an
+increasing version code. The app supports Android 9 through Android 16, API 28-36.
+Access is currently limited to the configured tester email list while the Play
+developer account completes Google's testing and production-access requirements.
 
 The app currently provides:
 
@@ -93,6 +93,37 @@ See [the accessibility release checklist](docs/accessibility-release-checklist.m
 The server provides Google Cloud speech and vision, Gemini reasoning, conversation,
 memory, Context Snapshot policy and text-to-speech.
 
+## Project map
+
+```text
+app/src/main/java/com/idumet/frank/
+  MainActivity.kt                 launcher and onboarding entry point
+  AssistActivity.kt               assistant activity entry point
+  FrankConversationHost.kt        lifecycle-aware UI/controller composition
+  FrankAssistantScreen.kt         main Compose experience and state presentation
+  assistant/FrankAssistantController.kt
+                                   turn coordination and client state
+  network/FrankWebSocketClient.kt WebSocket turns, reconnect and evidence exchange
+  network/DeviceStreamModels.kt   typed transport envelopes
+  context/                        Context Snapshot models, location and movement
+  camera/FrankCamera.kt           CameraX capture, focus and prepared evidence
+  productdata/                    Kotlin mirrors of typed server actions/data
+  service/                        recording, silence detection, playback and voice service
+  permissions/                    microphone, camera and location permissions
+  ui/theme/                       colour, typography and Compose theme
+app/src/test/                     local JVM tests
+app/src/androidTest/              device and accessibility-oriented tests
+docs/                             release, accessibility and Play operations
+fastlane/                         Play listing metadata and upload lane
+.github/workflows/                signed internal-release automation
+```
+
+Keep wire and product-data models aligned with the server's versioned Zod
+contracts. Network callbacks should flow through `FrankAssistantController`; avoid
+letting individual screens create their own sockets, recorders or camera sessions.
+Any lifecycle change should preserve cancellation, stale-request rejection and the
+Ready → Listening → Thinking → Speaking state model.
+
 ## Permissions
 
 Frank requests microphone access for voice interaction. Camera and foreground
@@ -100,10 +131,26 @@ location are optional and requested through onboarding when their related featur
 are enabled. Denying either preserves voice-only operation. The V1 app does not
 request background location.
 
-## Building
+## Local development
 
-Debug builds can use Gradle properties or ignored `local.properties` values for the
-server URL and product token. Never commit a token.
+### Fresh checkout
+
+Use Android Studio with JDK 17 and the Android 36 SDK. Let the project use its
+checked-in Gradle wrapper; a separate Gradle installation is unnecessary. Create
+an ignored `local.properties` file containing your SDK path and private test
+configuration:
+
+```properties
+sdk.dir=/absolute/path/to/Android/sdk
+frank.server.url=https://your-frank-server.example/
+frank.access.token=your-private-product-token
+```
+
+The URL must use `https://`; the client derives the secure `wss://` device-stream
+URL itself. Keep the trailing slash for Retrofit. Never commit `local.properties`,
+tokens, keystores or service-account JSON.
+
+Build and run the `app` configuration in Android Studio, or use:
 
 ```sh
 ./gradlew testDebugUnitTest lintDebug assembleDebug
@@ -116,6 +163,31 @@ On Windows:
 ```
 
 The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
+
+For a quick server check, open the configured `/health` URL first. A device stuck
+on “Waiting for Frank” usually means the bearer token, WebSocket URL, network or
+server health is wrong; inspect Logcat for `FrankWebSocketClient` before changing
+audio thresholds.
+
+### Test guidance
+
+Run local JVM tests for every code change:
+
+```sh
+./gradlew testDebugUnitTest
+```
+
+Run lint and assemble the actual APK before merging:
+
+```sh
+./gradlew lintDebug assembleDebug
+```
+
+Camera, microphone, location, audio focus, reconnection and TalkBack behavior need
+a physical phone. Exercise permission denial, screen lock, app background/restore,
+network loss, low speech volume, stale camera evidence and stop during playback.
+The full manual sequence is in
+[the accessibility release checklist](docs/accessibility-release-checklist.md).
 
 A signed Play bundle requires the upload-key environment variables plus increasing
 version values:
@@ -140,9 +212,41 @@ link. Google currently requires this developer account to run a closed test with
 least 12 opted-in testers for 14 continuous days before production access can be
 requested. Until that gate is complete, there is no unrestricted Play Store link.
 
-The release workflow builds a signed Android App Bundle and publishes versioned
-release notes after its protected GitHub environment is configured. Play App
-Signing holds the production signing key; Frank retains a replaceable upload key.
+Every commit pushed to `main` starts `Publish internal Android release`. The job
+builds a signed Android App Bundle, assigns an increasing version code, and uploads
+the bundle plus listing text to the Play Internal Testing track. Runs are serialized
+so two commits cannot upload concurrently. A documentation-only commit still makes
+a Play build, so use branches while drafting.
+
+The workflow requires these GitHub secrets:
+
+```text
+FRANK_UPLOAD_KEYSTORE_BASE64
+FRANK_UPLOAD_STORE_PASSWORD
+FRANK_UPLOAD_KEY_ALIAS
+FRANK_UPLOAD_KEY_PASSWORD
+PLAY_SERVICE_ACCOUNT_JSON
+FRANK_SERVER_URL
+FRANK_ACCESS_TOKEN
+```
+
+Play App Signing holds the production signing key; Frank retains only the
+replaceable upload key. The workflow can also be started manually with an explicit
+version code/name or from an `android-v*` tag. Do not reuse a Play version code.
+
+### Safe maintenance checklist
+
+1. Work on a branch and run unit tests, lint and `assembleDebug`.
+2. Test voice, cancellation, reconnection and any affected sensor on a real phone.
+3. Check server contract changes against `network`, `context` and `productdata`.
+4. Merge to `main` and watch the GitHub Actions release through the Play upload.
+5. Confirm the new version appears in Play Internal Testing before sharing it.
+6. If a release fails, read the failed step; do not rotate or paste secrets into logs.
+
+The app is currently deployed to Google Play Internal Testing, while its backend
+runs on the Frank staging VM in Google Cloud. Publishing the Android app does not
+deploy the server, and deploying the server does not rebuild Android; each
+repository follows its own `main` branch automation.
 
 ## Copyright
 
