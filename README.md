@@ -213,7 +213,8 @@ least 12 opted-in testers for 14 continuous days before production access can be
 requested. Until that gate is complete, there is no unrestricted Play Store link.
 
 Every commit pushed to `main` starts `Publish internal Android release`. The job
-builds a signed Android App Bundle, assigns an increasing version code, and uploads
+builds a signed Android App Bundle, assigns an increasing version code from the
+GitHub Actions run number, and uploads
 the bundle plus listing text to the Play Internal Testing track. Runs are serialized
 so two commits cannot upload concurrently. A documentation-only commit still makes
 a Play build, so use branches while drafting.

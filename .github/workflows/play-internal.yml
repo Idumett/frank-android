@@ -51,7 +51,7 @@ jobs:
         run: |
           code="${{ inputs.version_code }}"
           name="${{ inputs.version_name }}"
-          if [[ -z "$code" ]]; then code=$((100000 + $(git rev-list --count HEAD))); fi
+          if [[ -z "$code" ]]; then code=$((200000 + GITHUB_RUN_NUMBER)); fi
           if [[ -z "$name" ]]; then
             if [[ "$GITHUB_REF" == refs/tags/android-v* ]]; then
               name="${GITHUB_REF_NAME#android-v}"
