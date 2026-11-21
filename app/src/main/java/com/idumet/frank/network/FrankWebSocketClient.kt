@@ -28,6 +28,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 class FrankWebSocketClient(
     private val listener: Listener
@@ -88,6 +89,10 @@ class FrankWebSocketClient(
 
     private val requestStartedAt =
         ConcurrentHashMap<String, Long>()
+
+    private val activeRequestId = AtomicReference<String?>(null)
+
+    private val evidenceCalls = ConcurrentHashMap<String, Call>()
 
     private val mainHandler =
         Handler(Looper.getMainLooper())
@@ -155,6 +160,11 @@ class FrankWebSocketClient(
                     text: String
                 ) {
                     if (this@FrankWebSocketClient.webSocket === webSocket) {
+                        if (text.length > MAX_SERVER_MESSAGE_CHARS) {
+                            listener.onError("Frank returned an oversized response")
+                            webSocket.close(1009, "Response too large")
+                            return
+                        }
                         handleMessage(text)
                     }
                 }
@@ -206,6 +216,8 @@ class FrankWebSocketClient(
         webSocket = null
         isReady = false
         requestStartedAt.clear()
+        activeRequestId.set(null)
+        cancelEvidenceUploads()
         listener.onDisconnected()
 
         if (keepConnected) {
@@ -291,9 +303,9 @@ class FrankWebSocketClient(
 
         check(
             file.exists() &&
-                    file.length() > WAV_HEADER_SIZE
+                    file.length() in (WAV_HEADER_SIZE + 1)..MAX_AUDIO_BYTES
         ) {
-            "Recorded audio file is empty"
+            "Recorded audio is empty or too large"
         }
 
         val audioBase64 =
@@ -354,8 +366,8 @@ class FrankWebSocketClient(
                 sessionId = sessionId
             )
 
-        requestStartedAt[trace.requestId] =
-            SystemClock.elapsedRealtime()
+        activeRequestId.set(trace.requestId)
+        requestStartedAt[trace.requestId] = SystemClock.elapsedRealtime()
 
         try {
             sendAudio(audioFile, trace)
@@ -363,6 +375,7 @@ class FrankWebSocketClient(
             return trace.requestId
         } catch (exception: Exception) {
             requestStartedAt.remove(trace.requestId)
+            activeRequestId.compareAndSet(trace.requestId, null)
             throw exception
         }
     }
@@ -385,12 +398,17 @@ class FrankWebSocketClient(
             }
             .post(bytes.toRequestBody(mime.toMediaType()))
             .build()
-        client.newCall(request).enqueue(object : Callback {
+        val call = client.newCall(request)
+        evidenceCalls[trace.requestId] = call
+        call.enqueue(object : Callback {
             override fun onFailure(call: Call, exception: IOException) {
+                evidenceCalls.remove(trace.requestId, call)
+                if (call.isCanceled()) return
                 Log.w(LOG_TAG, "evidence_upload_failed requestId=${trace.requestId}", exception)
             }
 
             override fun onResponse(call: Call, response: Response) {
+                evidenceCalls.remove(trace.requestId, call)
                 response.use {
                     Log.d(LOG_TAG, "evidence_uploaded requestId=${trace.requestId} status=${it.code} bytes=${bytes.size}")
                 }
@@ -466,6 +484,7 @@ class FrankWebSocketClient(
 
                 "frame_required" -> {
                     val trace = gson.fromJson(jsonObject.get("trace"), DeviceTrace::class.java)
+                    if (!isCurrentRequest(trace.requestId)) return
                     val maxAgeMs = jsonObject.get("maxAgeMs")?.asLong ?: DEFAULT_FRAME_MAX_AGE_MS
                     val frameRequestId = jsonObject.get("frameRequestId")?.asString
                         ?: throw IllegalStateException("Camera request has no identity")
@@ -477,6 +496,7 @@ class FrankWebSocketClient(
                 }
 
                 "transcript" -> {
+                    if (!isCurrentResponse(jsonObject)) return
                     val transcript =
                         jsonObject
                             .get("transcript")
@@ -493,6 +513,7 @@ class FrankWebSocketClient(
                 }
 
                 "meta" -> {
+                    if (!isCurrentResponse(jsonObject)) return
                     logRoundTrip(jsonObject, "reply_received")
 
                     val reply =
@@ -510,6 +531,7 @@ class FrankWebSocketClient(
                 }
 
                 "audio" -> {
+                    if (!isCurrentResponse(jsonObject)) return
                     logRoundTrip(jsonObject, "audio_received", complete = true)
 
                     val bytesBase64 =
@@ -521,9 +543,13 @@ class FrankWebSocketClient(
                             ?.asString
 
                     if (!bytesBase64.isNullOrBlank()) {
+                        check(bytesBase64.length <= MAX_AUDIO_BASE64_CHARS) {
+                            "Frank returned oversized audio"
+                        }
                         listener.onAudioReceived(
                             bytesBase64
                         )
+                        activeRequestId.compareAndSet(requestId(jsonObject), null)
                     }
                 }
 
@@ -538,8 +564,10 @@ class FrankWebSocketClient(
                             ?: "Unknown Frank server error"
 
                     val requestId = requestId(jsonObject)
+                    if (requestId != null && !isCurrentRequest(requestId)) return
                     Log.e(LOG_TAG, "server_error requestId=$requestId message=$message")
                     if (requestId != null) requestStartedAt.remove(requestId)
+                    activeRequestId.compareAndSet(requestId, null)
                     listener.onError(message)
                 }
 
@@ -582,6 +610,14 @@ class FrankWebSocketClient(
             ?.takeUnless { it.isJsonNull }
             ?.asString
 
+    private fun isCurrentResponse(jsonObject: com.google.gson.JsonObject): Boolean {
+        val requestId = requestId(jsonObject) ?: return false
+        return isCurrentRequest(requestId)
+    }
+
+    private fun isCurrentRequest(requestId: String): Boolean =
+        activeRequestId.get() == requestId
+
     fun stop() {
         val sent = webSocket?.send(
             gson.toJson(mapOf("type" to "stop"))
@@ -589,6 +625,11 @@ class FrankWebSocketClient(
 
         if (!sent && isReady) {
             listener.onError("Failed to stop the active Frank request")
+        }
+
+        activeRequestId.getAndSet(null)?.let {
+            requestStartedAt.remove(it)
+            evidenceCalls.remove(it)?.cancel()
         }
     }
 
@@ -598,6 +639,8 @@ class FrankWebSocketClient(
         isReady = false
         reconnectAttempt = 0
         requestStartedAt.clear()
+        activeRequestId.set(null)
+        cancelEvidenceUploads()
         mainHandler.removeCallbacks(reconnect)
 
         val socket = webSocket
@@ -640,23 +683,32 @@ class FrankWebSocketClient(
                 UUID.randomUUID()
     }
 
+    private fun cancelEvidenceUploads() {
+        evidenceCalls.values.forEach(Call::cancel)
+        evidenceCalls.clear()
+    }
+
     companion object {
         private const val LOG_TAG = "FrankDiagnostics"
         private const val WAV_HEADER_SIZE = 44L
         private const val MAX_IMAGE_BYTES = 8L * 1024L * 1024L
+        private const val MAX_AUDIO_BYTES = 8L * 1024L * 1024L
+        private const val MAX_AUDIO_BASE64_CHARS = 12 * 1024 * 1024
+        private const val MAX_SERVER_MESSAGE_CHARS = 13 * 1024 * 1024
         private const val DEFAULT_FRAME_MAX_AGE_MS = 4_000L
 
         private fun deviceStreamUrl(): String {
-            val serverUrl = BuildConfig.FRANK_SERVER_URL.trimEnd('/')
-            val websocketBase = when {
-                serverUrl.startsWith("https://") -> "wss://${serverUrl.removePrefix("https://")}"
-                serverUrl.startsWith("http://") -> "ws://${serverUrl.removePrefix("http://")}"
-                else -> error("Frank server URL must start with http:// or https://")
-            }
-            return "$websocketBase/v1/device/stream"
+            return FrankEndpoint.deviceStream(
+                BuildConfig.FRANK_SERVER_URL,
+                releaseBuild = !BuildConfig.DEBUG
+            )
         }
 
         private fun evidenceUploadUrl(requestId: String): String =
-            "${BuildConfig.FRANK_SERVER_URL.trimEnd('/')}/v1/device/evidence/$requestId"
+            FrankEndpoint.evidenceUpload(
+                BuildConfig.FRANK_SERVER_URL,
+                requestId,
+                releaseBuild = !BuildConfig.DEBUG
+            )
     }
 }
